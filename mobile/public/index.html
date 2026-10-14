@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="%LANG_ISO_CODE%">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <!-- viewport-fit=cover: la app ocupa también la zona de la muesca y la barra inferior del iPhone;
+         los márgenes seguros los aplica la propia app (react-native-safe-area-context). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>%WEB_TITLE%</title>
+
+    <!-- App web instalable: al agregarla a la pantalla de inicio se abre a pantalla completa, sin barras del navegador. -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Dominó" />
+    <meta name="application-name" content="Dominó" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+
+    <!-- Reinicio de estilos recomendado por react-native-web. -->
+    <style id="expo-reset">
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        overflow: hidden;
+      }
+      #root {
+        display: flex;
+        height: 100%;
+        flex: 1;
+      }
+    </style>
+    <!-- Fondo de la app en toda la página: así las barras del navegador y las zonas
+         fuera del contenido se ven del mismo azul marino y no en blanco. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background-color: #050a24;
+        color-scheme: dark;
+        -webkit-tap-highlight-color: transparent;
+        overscroll-behavior: none;
+      }
+    </style>
+  </head>
+
+  <body>
+    <noscript>Necesitas activar JavaScript para usar esta app.</noscript>
+    <div id="root"></div>
+  </body>
+</html>

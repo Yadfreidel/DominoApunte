@@ -23,8 +23,10 @@
       "bundler": "metro",
       "output": "single",
       "name": "Dominó",
-      "themeColor": "#070B24",
-      "backgroundColor": "#070B24"
+      "themeColor": "#050A24",
+      "backgroundColor": "#050A24",
+      "lang": "es",
+      "description": "Anota los puntos de tus partidas de dominó."
     },
     "plugins": [
       "expo-router",
@@ -47,11 +49,11 @@
       ]
     ],
     "scheme": "dominopuntos",
-    "backgroundColor": "#070B24",
+    "backgroundColor": "#050A24",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#070B24"
+      "backgroundColor": "#050A24"
     },
     "experiments": {
       "typedRoutes": false
