@@ -37,6 +37,13 @@
           "cameraPermission": "Permite tomar una foto del jugador.",
           "microphonePermission": false
         }
+      ],
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Permite usar el micrófono para anotar puntos por voz.",
+          "speechRecognitionPermission": "Permite reconocer tu voz para anotar puntos. En algunos dispositivos el audio se envía a Apple o Google para transcribirlo."
+        }
       ]
     ],
     "scheme": "dominopuntos",

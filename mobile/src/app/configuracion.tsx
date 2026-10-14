@@ -1,5 +1,4 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
 import { useState } from 'react';
 import { StyleSheet, Switch, Text, View } from 'react-native';
 import { AppHeader } from '@/components/AppHeader';
@@ -10,11 +9,13 @@ import { parseTarget } from '@/domain/game.ts';
 import { ApiError, normalizeApiUrl, request } from '@/services/api';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, space } from '@/theme';
+import { useGoTo } from '@/navigation';
 
 export default function SettingsScreen() {
   const store = useStore();
   const { settings, user, sync, serverManagedSettings } = store;
   const { confirm, toast } = useDialogs();
+  const goTo = useGoTo();
 
   const [newTarget, setNewTarget] = useState('');
   const [targetError, setTargetError] = useState<string | null>(null);
@@ -199,7 +200,7 @@ export default function SettingsScreen() {
                 {sync.lastError ? <ErrorText>{sync.lastError}</ErrorText> : null}
                 <Button label="Sincronizar ahora" icon="sync" variant="outline" size="sm" onPress={() => store.syncNow()} loading={sync.syncing} />
               </View>
-              {user.role === 'admin' ? <Button label="Ir a Administración" icon="shield-checkmark-outline" variant="purple" onPress={() => router.navigate('/admin')} /> : null}
+              {user.role === 'admin' ? <Button label="Ir a Administración" icon="shield-checkmark-outline" variant="purple" onPress={() => goTo('/admin')} /> : null}
             </View>
           ) : (
             <View style={{ gap: space.md }}>

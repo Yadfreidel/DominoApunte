@@ -1,10 +1,11 @@
-import { router, Stack } from 'expo-router';
+import { Stack } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { AppHeader } from '@/components/AppHeader';
 import { Button, EmptyState, Loading, Screen } from '@/components/ui';
 import { ApiError, type User } from '@/services/api';
 import { useStore } from '@/state/AppStore';
 import { colors } from '@/theme';
+import { goBackOr, useGoTo } from '@/navigation';
 
 /**
  * Guardia del panel. Ocultar el menú no basta: aquí se vuelve a validar la sesión con el servidor,
@@ -14,6 +15,7 @@ type GuardState = 'checking' | 'ok' | 'denied' | 'login' | 'offline';
 
 export default function AdminLayout() {
   const store = useStore();
+  const goTo = useGoTo();
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState<{ key: string; state: Exclude<GuardState, 'checking'>; message?: string } | null>(null);
   const userId = store.user?.id;
@@ -51,7 +53,7 @@ export default function AdminLayout() {
           icon="lock-closed-outline"
           title="Acceso restringido"
           message="Inicia sesión con una cuenta de administrador en Configuración para entrar al panel."
-          action={<Button label="Ir a Configuración" icon="log-in-outline" onPress={() => router.navigate('/configuracion')} />}
+          action={<Button label="Ir a Configuración" icon="log-in-outline" onPress={() => goTo('/configuracion')} />}
         />
       ) : null}
       {state === 'denied' ? (
@@ -59,7 +61,7 @@ export default function AdminLayout() {
           icon="hand-left-outline"
           title="Sin permisos"
           message="Tu usuario no tiene permisos de administrador."
-          action={<Button label="Volver" variant="outline" onPress={() => router.navigate('/')} />}
+          action={<Button label="Volver" variant="outline" onPress={() => goBackOr('/')} />}
         />
       ) : null}
       {state === 'offline' ? (

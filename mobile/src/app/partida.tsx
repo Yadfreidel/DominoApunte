@@ -5,11 +5,13 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { AppHeader } from '@/components/AppHeader';
 import { useDialogs } from '@/components/Dialogs';
 import { NumericKeypad, type KeypadSide } from '@/components/NumericKeypad';
+import { VoiceScoreSheet } from '@/components/VoiceScoreSheet';
 import { HandLedger, ScoreCard } from '@/components/Score';
 import { Button, Card, EmptyState, Screen } from '@/components/ui';
 import { newId, sideLabel, totals as computeTotals } from '@/domain/game.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, sideColor, space } from '@/theme';
+import { useGoTo } from '@/navigation';
 
 type KeypadState =
   | { kind: 'add'; handId: string; sideId: string | null; initialValue: string }
@@ -23,6 +25,8 @@ export default function Scoreboard() {
   /** Mano que se está consultando con las flechas; se descarta al cambiar de partida o de número de manos. */
   const [browseState, setBrowseState] = useState<{ key: string; index: number | null }>({ key: '', index: null });
   const [busy, setBusy] = useState(false);
+  const [voiceOpen, setVoiceOpen] = useState(false);
+  const goTo = useGoTo();
   const browseKey = `${game?.id}:${game?.hands.length}`;
   const browse = browseState.key === browseKey ? browseState.index : null;
   const setBrowse = (update: (b: number | null) => number | null) =>
@@ -204,7 +208,7 @@ export default function Scoreboard() {
           </Text>
           <View style={s.winnerActions}>
             <Button label="Revancha" icon="refresh" onPress={rematch} loading={busy} style={{ flex: 1 }} />
-            <Button label="Nueva" icon="add" variant="outline" onPress={() => router.navigate('/nueva')} style={{ flex: 1 }} />
+            <Button label="Nueva" icon="add" variant="outline" onPress={() => goTo('/nueva')} style={{ flex: 1 }} />
           </View>
         </Card>
       ) : null}
@@ -255,6 +259,20 @@ export default function Scoreboard() {
         </View>
       ) : null}
 
+      {pending ? (
+        <View style={s.assist}>
+          <Button label="Voz" icon="mic-outline" variant="outline" size="sm" onPress={() => setVoiceOpen(true)} style={s.assistBtn} />
+          <Button
+            label="Contar fichas"
+            icon="scan-outline"
+            variant="outline"
+            size="sm"
+            onPress={() => router.push({ pathname: '/contar', params: { gameId: game.id } })}
+            style={s.assistBtn}
+          />
+        </View>
+      ) : null}
+
       {pending && handCount === 0 ? (
         <View style={s.tapHint}>
           <Ionicons name="hand-left-outline" size={16} color={colors.textMuted} />
@@ -293,6 +311,17 @@ export default function Scoreboard() {
         </Text>
       </View>
       {pending ? <Button label="Cancelar partida" variant="ghost" size="sm" icon="close-circle-outline" onPress={cancel} /> : null}
+
+      {voiceOpen && pending ? (
+        <VoiceScoreSheet
+          game={game}
+          onClose={() => setVoiceOpen(false)}
+          onManual={() => {
+            setVoiceOpen(false);
+            openAdd(null);
+          }}
+        />
+      ) : null}
 
       <NumericKeypad
         key={keypad?.handId ?? 'cerrado'}
@@ -358,6 +387,8 @@ const s = StyleSheet.create({
   handNavCenter: { flex: 1, alignItems: 'center', paddingHorizontal: space.sm },
   handNavTitle: { color: colors.text, fontSize: 21, fontWeight: '700' },
   handNavDetail: { fontSize: 12, fontWeight: '600' },
+  assist: { flexDirection: 'row', gap: space.sm },
+  assistBtn: { flex: 1 },
   tapHint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: space.md },
   tapHintText: { color: colors.textMuted, fontSize: 14, textAlign: 'center', flexShrink: 1 },
   historyHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: space.sm, marginTop: space.sm },

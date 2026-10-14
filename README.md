@@ -142,12 +142,99 @@ También puedes preconfigurar la dirección copiando `mobile/.env.example` como 
 
 ---
 
+## Anotación por voz y conteo de fichas con cámara
+
+Las dos funciones **solo proponen** una anotación. El marcador cambia únicamente cuando el usuario pulsa **Confirmar**, y la mano se registra con el mismo mecanismo que la anotación manual (`addHand` con un identificador de mano fijo, así que un doble toque o un reintento no la duplican). Cancelar nunca modifica el marcador, y la anotación manual (tocar la tarjeta del equipo) está disponible en todo momento.
+
+### Voz ("Voz" en el marcador)
+
+- **Tecnología:** [`expo-speech-recognition`](https://github.com/jamsch/expo-speech-recognition) `57.1.1` (versión para Expo SDK 57). Usa el reconocimiento de voz del sistema: Apple en iPhone, el servicio de reconocimiento de Android (normalmente Google) y la Web Speech API en el navegador.
+- **Dónde funciona:**
+  - **No funciona en Expo Go**, porque es un módulo nativo. La app lo detecta, avisa y ofrece "Anotar a mano". En el teléfono hace falta la versión instalable (*development build* o APK/IPA con EAS, ver abajo).
+  - En la web funciona con **Chrome** (escritorio y Android) y **Safari 16+**; no funciona en Firefox ni en Brave.
+- **Conexión:** según el dispositivo, el reconocimiento puede **requerir internet** y enviar el audio a Apple o Google para transcribirlo. La app no graba ni guarda audio.
+- **Flujo:** escuchando → procesando → revisión (texto escuchado editable, destinatario y puntos) → "Sumar 23 puntos a Juan" → Confirmar / Cancelar. Si falla (permiso denegado, sin voz, sin red, no disponible), muestra el motivo y ofrece la entrada manual.
+- **Interpretación** (`mobile/src/domain/voice.ts`, código propio y probado):
+  - Entiende números en cifras o en palabras ("veintitrés", "ciento treinta y cinco").
+  - Los nombres se resuelven **solo** contra la partida activa: nombre del jugador, primer nombre, nombre del equipo, "pareja 2" y colores ("equipo verde/morado").
+  - Si el nombre es ambiguo, se mencionan varios destinatarios, falta el número, hay varios números o se supera el máximo de 1000 por mano, **no adivina**: pide elegir o corregir.
+  - Ante nombres parecidos ("Martha" por "Marta") sugiere, pero no elige.
+- **Una sola escucha a la vez:** al cerrar la ventana se cancela la escucha y se libera el micrófono.
+- **Costo:** ninguno para la app; usa el servicio del sistema.
+
+### Conteo de fichas ("Contar fichas" en el marcador)
+
+- **Flujo:**
+  1. Elegir el conjunto: doble seis, doble nueve o doble doce.
+  2. Leer la guía de foto: fichas completas y separadas, boca arriba, fondo liso, buena luz y cámara desde arriba.
+  3. Tomar una foto o elegir una imagen.
+  4. Revisar el resultado: marcas numeradas sobre la foto y la lista "Ficha 1: 6 | 4 = 10", con botones − / + por mitad, eliminar ficha, "Está bien" y agregar una ficha omitida.
+  5. Confirmar el grupo, elegir a quién se le suman y pulsar "Sumar N puntos a X".
+  6. Si hace falta, contar varios grupos en una misma mano. Cada grupo se confirma una vez y no se suma dos veces.
+  7. "Contar a mano" permite hacer todo sin foto y sin internet.
+- **Reglas que aplica el código, no el modelo:**
+  - El total se calcula sumando mitades y la mitad en blanco vale 0.
+  - Un valor fuera del conjunto o ilegible queda vacío y marcado para revisión.
+  - Dos rectángulos casi idénticos se marcan como "posible duplicado". Dos fichas físicas iguales en lugares distintos **no** se marcan.
+  - No se puede confirmar un grupo con fichas pendientes de revisión.
+  - No se muestran porcentajes de confianza, porque el servicio no entrega una confianza calibrada.
+- **Servicio:** el servidor envía la foto a la API de Claude (modelo `claude-opus-5-5`) con salida estructurada por ficha: ubicación, mitad 1, mitad 2 y si requiere revisión. La documentación oficial advierte que el conteo de objetos y las coordenadas son aproximados; por eso todo pasa por la revisión del usuario. Para que las marcas coincidan con la foto:
+  - La app reduce la imagen al tamaño máximo que el modelo procesa sin reescalar: 2576 px de lado y 4784 tokens visuales.
+  - El servidor rechaza cualquier imagen que el modelo fuera a reescalar.
+  - Si el modelo declina la solicitud, el servidor la reintenta con el modelo alternativo predeterminado de la API (`fallbacks: "default"`).
+- **Privacidad:** la foto viaja de la app al servidor y del servidor a Anthropic solo para el análisis; **no se guarda** ni en el teléfono, ni en el servidor, ni en registros. Según Anthropic, las imágenes enviadas a la API no se usan para entrenar modelos.
+- **Configuración necesaria:**
+  1. Crear una clave en [platform.claude.com](https://platform.claude.com) y ponerla en `server/.env` como `ANTHROPIC_API_KEY=...`. Nunca va en la app.
+  2. Reiniciar el servidor.
+  3. Iniciar sesión en la app (Configuración). El análisis exige sesión porque tiene costo.
+- **Costo estimado:** con las tarifas publicadas de Claude Opus 5.5 ($4 por millón de tokens de entrada y $20 por millón de salida), una foto de tamaño máximo son ≈4.800 tokens de imagen (≈$0,02). El modelo además genera texto de razonamiento y respuesta, que se cobra como salida; el costo total por foto aún **no se midió**, porque no había una clave disponible durante el desarrollo.
+- **Límites:** 30 análisis cada 10 minutos por usuario, 2 minutos de espera máxima y cancelación al salir de la pantalla. Una respuesta tardía nunca se aplica a otra partida ni a otro grupo.
+
+### Generar la versión instalable (necesaria para la voz en el teléfono)
+
+```bash
+cd mobile
+npx eas-cli@latest build --profile development --platform android   # o --platform ios
+```
+
+Se necesita una cuenta gratuita de Expo. Antes, agrega `android.package` / `ios.bundleIdentifier` en `app.json`.
+
+### Qué está verificado y qué falta
+
+| | Estado |
+|---|---|
+| Lógica de voz (números, nombres, ambigüedades, límites) | 11 pruebas con **transcripciones escritas** (varias frases cada una) |
+| Lógica de conteo y tamaño de foto (mitades en blanco, revisión, duplicados, grupos, total) | 8 pruebas con **datos simulados** |
+| Servidor de visión (validación de imagen, normalización, errores, sin clave) | 12 pruebas con **servicio simulado** |
+| Flujo completo en el navegador (cancelar no cambia nada, cada confirmación registra una sola mano, respuesta tardía descartada, permiso denegado) | 19 comprobaciones con **voz y visión simuladas** |
+| **Reconocimiento real de voz** | **No probado**: no hubo micrófono, audios ni dispositivo físico disponibles. |
+| **Reconocimiento real de fichas** | **No probado**: no había clave de la API ni fotos reales. **0 muestras reales evaluadas.** |
+
+**Pruebas reales pendientes antes de usarlo en producción:**
+
+- **Voz, en Android y iPhone con la versión instalable:**
+  - Números dichos en cifras y en palabras (5, 15, 23, 35, 100, 135).
+  - Nombres parecidos (Juan y Juana, Marta y Martha).
+  - Ruido de mesa.
+  - Frases incompletas.
+  - Cancelar a mitad.
+  - Permiso de micrófono denegado y luego concedido.
+  - Modo avión.
+- **Cámara, con al menos 30 fotos reales por conjunto:**
+  - Fichas en blanco (0|0) y dobles.
+  - Fichas giradas y verticales.
+  - De 1 a 20 fichas.
+  - Sombras, reflejos y fichas encimadas o cortadas.
+  - Fotos sin dominó y fichas boca abajo.
+  - Registrar, por cada foto, cuántas fichas se detectaron bien, cuántas mitades estuvieron bien y el costo real (tokens de `usage`).
+- Verificar en el teléfono que una mano confirmada aparece una sola vez después de sincronizar.
+
 ## Pruebas
 
 ```bash
-cd mobile && npm test          # reglas de partida, validación y recuperación tras reinicio (16 pruebas)
+cd mobile && npm test          # reglas de partida, voz, conteo de fichas y recuperación (38 pruebas)
 cd mobile && npm run typecheck && npx expo lint
-cd server && npm test          # autenticación, permisos, sincronización y correcciones (20 pruebas)
+cd server && npm test          # autenticación, permisos, sincronización, correcciones y visión simulada (33 pruebas)
 ```
 
 Además, se verificó la app web real contra la API con un navegador automatizado: 32 comprobaciones de creación, suma, edición, deshacer, ganador, recuperación tras recargar, revancha, historial, bloqueo de un anotador al entrar al panel, corrección administrativa y su llegada al dispositivo.

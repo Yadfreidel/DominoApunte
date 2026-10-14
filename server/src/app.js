@@ -12,6 +12,7 @@ import {
 } from './auth.js';
 import { DEFAULT_SETTINGS, getSettings, saveSettings, transaction } from './db.js';
 import { isNonNegativeInt, MAX_HAND_POINTS, MAX_TARGET, recompute } from './domain.js';
+import { createDominoAnalyzer, VisionError } from './vision.js';
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -115,7 +116,7 @@ export function validateIncomingGame(g) {
   };
 }
 
-export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [] }) {
+export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [], visionAnalyzer = createDominoAnalyzer() }) {
   if (!jwtSecret || jwtSecret.length < 32) {
     throw new Error('JWT_SECRET es obligatorio y debe tener al menos 32 caracteres.');
   }
@@ -124,7 +125,10 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
   app.disable('x-powered-by');
   app.set('trust proxy', 'loopback');
   app.use(cors({ origin: corsOrigins.length ? corsOrigins : '*' }));
-  app.use(express.json({ limit: '2mb' }));
+  const smallJson = express.json({ limit: '2mb' });
+  // Solo la ruta de conteo de fichas acepta cuerpos grandes (la foto en base64).
+  const imageJson = express.json({ limit: '8mb' });
+  app.use((req, res, next) => (req.path === '/api/vision/dominoes' ? imageJson : smallJson)(req, res, next));
   app.use((req, res, next) => {
     res.set('Cache-Control', 'no-store');
     res.set('X-Content-Type-Options', 'nosniff');
@@ -368,6 +372,43 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
       }
     }
     res.json({ accepted, serverVersions, deleted, errors });
+  });
+
+  // ---------- Conteo de fichas con cámara ----------
+  const visionLimiter = new Map();
+  const VISION_WINDOW_MS = 10 * 60 * 1000;
+  const VISION_MAX_REQUESTS = 30;
+
+  app.get('/api/vision/status', auth, (req, res) => {
+    res.json({ configured: visionAnalyzer.configured });
+  });
+
+  app.post('/api/vision/dominoes', auth, async (req, res) => {
+    const { image, width, height, set } = req.body ?? {};
+    if (!Number.isInteger(width) || !Number.isInteger(height)) throw bad('Faltan las dimensiones de la imagen.');
+    const now = Date.now();
+    const recent = (visionLimiter.get(req.user.id) ?? []).filter((t) => now - t < VISION_WINDOW_MS);
+    if (recent.length >= VISION_MAX_REQUESTS) {
+      return res.status(429).json({ error: 'Demasiados análisis seguidos. Espera unos minutos.' });
+    }
+    recent.push(now);
+    visionLimiter.set(req.user.id, recent);
+
+    // Si la app se desconecta (pantalla cerrada, cancelación), se cancela la llamada al servicio.
+    const controller = new AbortController();
+    res.on('close', () => {
+      if (!res.writableEnded) controller.abort();
+    });
+    try {
+      const result = await visionAnalyzer.analyze({ imageBase64: image, width, height, set }, { signal: controller.signal });
+      res.json(result);
+    } catch (err) {
+      if (err instanceof VisionError) {
+        if (!res.headersSent && !controller.signal.aborted) res.status(err.status).json({ error: err.message });
+        return;
+      }
+      throw err;
+    }
   });
 
   // ---------- Administración ----------

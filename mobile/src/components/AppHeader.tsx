@@ -1,11 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router, usePathname, type Href } from 'expo-router';
+import { usePathname, type Href } from 'expo-router';
 import { useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, space } from '@/theme';
 import { IconButton, type IconName } from './ui';
+import { useGoTo } from '@/navigation';
 
 interface MenuItem {
   label: string;
@@ -20,6 +21,7 @@ export function AppHeader({ subtitle, title = 'DOMINÓ' }: { subtitle?: string; 
   const { currentGame, isAdmin, user } = useStore();
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
+  const goTo = useGoTo();
 
   const items: MenuItem[] = [
     { label: 'Nueva partida', href: '/nueva', icon: 'add-circle-outline' },
@@ -38,7 +40,7 @@ export function AppHeader({ subtitle, title = 'DOMINÓ' }: { subtitle?: string; 
 
   const go = (href: Href) => {
     setOpen(false);
-    router.navigate(href);
+    goTo(href);
   };
 
   return (
@@ -48,7 +50,7 @@ export function AppHeader({ subtitle, title = 'DOMINÓ' }: { subtitle?: string; 
         <Text style={s.title} accessibilityRole="header" numberOfLines={1} adjustsFontSizeToFit>
           {title}
         </Text>
-        <IconButton icon="settings-sharp" label="Configuración" onPress={() => router.navigate('/configuracion')} size={26} />
+        <IconButton icon="settings-sharp" label="Configuración" onPress={() => goTo('/configuracion')} size={26} />
       </View>
       {subtitle ? (
         <View style={s.subtitleRow}>

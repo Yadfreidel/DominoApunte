@@ -1,5 +1,5 @@
 import { Ionicons } from '@expo/vector-icons';
-import { router, useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { FormModal } from '@/components/admin/FormModal';
@@ -14,6 +14,7 @@ import { MAX_HAND_POINTS, parsePoints, runningTotals, sideLabel, type Hand } fro
 import type { Correction, ServerGame } from '@/services/api';
 import { useStore } from '@/state/AppStore';
 import { colors, sideColor, space } from '@/theme';
+import { goBackOr } from '@/navigation';
 
 export default function AdminGameDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -22,7 +23,7 @@ export default function AdminGameDetail() {
   const q = useAdminQuery<{ game: ServerGame; corrections: Correction[] }>(`/admin/games/${encodeURIComponent(id)}`);
   const [editing, setEditing] = useState<{ hand: Hand; number: number } | null>(null);
 
-  const back = () => router.navigate({ pathname: '/admin', params: { seccion: 'partidas' } });
+  const back = () => goBackOr({ pathname: '/admin', params: { seccion: 'partidas' } });
 
   if (q.loading && !q.data) {
     return (

@@ -86,7 +86,7 @@ export default function NewGame() {
     try {
       await store.startGame(setup);
       toast('Partida creada. ¡Buena suerte!');
-      router.replace('/partida');
+      router.dismissTo('/partida');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'No se pudo crear la partida.');
     } finally {
@@ -131,7 +131,7 @@ export default function NewGame() {
               {currentGame.sides.map((sd) => sd.name).join(' vs ')}
             </Text>
           </View>
-          <Button label="Continuar" size="sm" onPress={() => router.navigate('/partida')} />
+          <Button label="Continuar" size="sm" onPress={() => router.dismissTo('/partida')} />
         </Card>
       ) : null}
 

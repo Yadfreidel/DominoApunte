@@ -9,6 +9,7 @@ import { Button, Card, EmptyState, Screen, StatusBadge } from '@/components/ui';
 import { sideLabel, totals as computeTotals } from '@/domain/game.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, space } from '@/theme';
+import { goBackOr } from '@/navigation';
 
 /** Detalle de una partida anterior. Es de solo lectura: aquí no se pueden modificar resultados. */
 export default function HistoryDetail() {
@@ -24,7 +25,7 @@ export default function HistoryDetail() {
           icon="alert-circle-outline"
           title="Partida no encontrada"
           message="Puede que haya sido eliminada por un administrador."
-          action={<Button label="Volver al historial" variant="outline" onPress={() => router.navigate('/historial')} />}
+          action={<Button label="Volver al historial" variant="outline" onPress={() => goBackOr('/historial')} />}
         />
       </Screen>
     );
@@ -36,14 +37,14 @@ export default function HistoryDetail() {
 
   const resume = async () => {
     await store.resumeGame(game.id);
-    router.navigate('/partida');
+    router.dismissTo('/partida');
   };
 
   const rematch = async () => {
     try {
       await store.rematch(game.id);
       toast('¡Revancha! Marcadores en cero.');
-      router.navigate('/partida');
+      router.dismissTo('/partida');
     } catch (err) {
       toast(err instanceof Error ? err.message : 'No se pudo crear la revancha.', 'error');
     }
@@ -51,7 +52,7 @@ export default function HistoryDetail() {
 
   return (
     <Screen header={<AppHeader subtitle="Detalle de partida" />}>
-      <Button label="Volver al historial" icon="arrow-back" variant="ghost" size="sm" onPress={() => router.navigate('/historial')} style={{ alignSelf: 'flex-start' }} />
+      <Button label="Volver al historial" icon="arrow-back" variant="ghost" size="sm" onPress={() => goBackOr('/historial')} style={{ alignSelf: 'flex-start' }} />
 
       <Card style={{ gap: 6 }}>
         <View style={s.rowBetween}>

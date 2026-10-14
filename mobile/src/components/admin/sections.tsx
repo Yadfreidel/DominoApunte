@@ -53,8 +53,8 @@ function Kpi({ icon, label, value, color }: { icon: IconName; label: string; val
   );
 }
 
-const openGame = (id: string) => router.navigate({ pathname: '/admin/partida/[id]', params: { id } });
-const openPlayer = (id: number) => router.navigate({ pathname: '/admin/jugador/[id]', params: { id: String(id) } });
+const openGame = (id: string) => router.push({ pathname: '/admin/partida/[id]', params: { id } });
+const openPlayer = (id: number) => router.push({ pathname: '/admin/jugador/[id]', params: { id: String(id) } });
 
 // ---------------------------------------------------------------- Inicio
 export function AdminHome() {

@@ -8,6 +8,7 @@ import { Button, Card, EmptyState, Label, Pill, Screen, Select } from '@/compone
 import { filterGames, nameKey, type GameStatus } from '@/domain/game.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, space } from '@/theme';
+import { useGoTo } from '@/navigation';
 
 const STATUS_FILTERS: { value: GameStatus | 'todas'; label: string; color: string }[] = [
   { value: 'todas', label: 'Todas', color: colors.lime },
@@ -18,6 +19,7 @@ const STATUS_FILTERS: { value: GameStatus | 'todas'; label: string; color: strin
 
 export default function History() {
   const { games, currentGame } = useStore();
+  const goTo = useGoTo();
   const [range, setRange] = useState<DateRange>({});
   const [player, setPlayer] = useState('');
   const [status, setStatus] = useState<GameStatus | 'todas'>('todas');
@@ -46,7 +48,7 @@ export default function History() {
           icon="time-outline"
           title="Todavía no hay partidas"
           message="Las partidas que juegues aparecerán aquí con todas sus manos."
-          action={<Button label="Nueva partida" icon="add" onPress={() => router.navigate('/nueva')} />}
+          action={<Button label="Nueva partida" icon="add" onPress={() => goTo('/nueva')} />}
         />
       ) : (
         <>
@@ -81,7 +83,7 @@ export default function History() {
                 key={g.id}
                 game={g}
                 current={currentGame?.id === g.id && g.status === 'pendiente'}
-                onPress={() => router.navigate({ pathname: '/historial/[id]', params: { id: g.id } })}
+                onPress={() => router.push({ pathname: '/historial/[id]', params: { id: g.id } })}
               />
             ))
           )}

@@ -45,7 +45,7 @@ interface StoreValue {
   login(username: string, password: string): Promise<User>;
   logout(): Promise<void>;
   /** Petición autenticada al servidor. Si la sesión dejó de ser válida, la cierra. */
-  api<T>(path: string, options?: { method?: string; body?: unknown }): Promise<T>;
+  api<T>(path: string, options?: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<T>;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -89,7 +89,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const authedRequest = useCallback(
-    async <T,>(path: string, options: { method?: string; body?: unknown } = {}): Promise<T> => {
+    async <T,>(
+      path: string,
+      options: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {},
+    ): Promise<T> => {
       const apiUrl = dataRef.current?.settings.apiUrl ?? '';
       if (!tokenRef.current) throw new ApiError(401, 'Debes iniciar sesión.');
       try {

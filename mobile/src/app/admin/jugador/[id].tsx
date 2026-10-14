@@ -6,11 +6,12 @@ import { formatDateTime, GameSummary } from '@/components/GameSummary';
 import { Button, Card, EmptyState, Loading, Screen, Stat } from '@/components/ui';
 import type { PlayerRow, ServerGame } from '@/services/api';
 import { colors, space } from '@/theme';
+import { goBackOr } from '@/navigation';
 
 export default function AdminPlayerDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const q = useAdminQuery<{ player: PlayerRow; games: ServerGame[] }>(`/admin/players/${encodeURIComponent(id)}`);
-  const back = () => router.navigate({ pathname: '/admin', params: { seccion: 'jugadores' } });
+  const back = () => goBackOr({ pathname: '/admin', params: { seccion: 'jugadores' } });
 
   return (
     <Screen header={<AppHeader subtitle="Administración · Jugador" />} maxWidth={900}>
@@ -40,7 +41,7 @@ export default function AdminPlayerDetail() {
           <Text style={s.section}>Partidas</Text>
           {q.data.games.length ? (
             q.data.games.map((g) => (
-              <GameSummary key={g.id} game={g} onPress={() => router.navigate({ pathname: '/admin/partida/[id]', params: { id: g.id } })} />
+              <GameSummary key={g.id} game={g} onPress={() => router.push({ pathname: '/admin/partida/[id]', params: { id: g.id } })} />
             ))
           ) : (
             <EmptyState icon="grid-outline" title="Sin partidas" message="Este jugador aún no tiene partidas registradas." />

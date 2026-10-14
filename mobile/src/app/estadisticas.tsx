@@ -1,4 +1,3 @@
-import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { AppHeader } from '@/components/AppHeader';
@@ -8,9 +7,11 @@ import { Button, Card, EmptyState, Screen, Stat } from '@/components/ui';
 import { computeStats, filterGames } from '@/domain/game.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, space } from '@/theme';
+import { useGoTo } from '@/navigation';
 
 export default function Stats() {
   const { games } = useStore();
+  const goTo = useGoTo();
   const [range, setRange] = useState<DateRange>({});
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -27,7 +28,7 @@ export default function Stats() {
           icon="stats-chart-outline"
           title="Sin estadísticas todavía"
           message="Termina tu primera partida para ver el ranking de jugadores."
-          action={<Button label="Nueva partida" icon="add" onPress={() => router.navigate('/nueva')} />}
+          action={<Button label="Nueva partida" icon="add" onPress={() => goTo('/nueva')} />}
         />
       ) : (
         <>

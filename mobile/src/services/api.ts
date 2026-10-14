@@ -75,11 +75,24 @@ export function normalizeApiUrl(url: string): string {
 export async function request<T>(
   baseUrl: string,
   path: string,
-  { method = 'GET', body, token }: { method?: string; body?: unknown; token?: string | null } = {},
+  {
+    method = 'GET',
+    body,
+    token,
+    timeoutMs = TIMEOUT_MS,
+    signal,
+  }: { method?: string; body?: unknown; token?: string | null; timeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<T> {
   if (!baseUrl) throw new ApiError(0, 'Configura la dirección del servidor en Configuración.');
+  if (signal?.aborted) throw new ApiError(499, 'Operación cancelada.');
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  const onCancel = () => controller.abort();
+  signal?.addEventListener('abort', onCancel);
   let res: Response;
   try {
     res = await fetch(`${normalizeApiUrl(baseUrl)}/api${path}`, {
@@ -93,9 +106,12 @@ export async function request<T>(
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
   } catch {
+    if (signal?.aborted) throw new ApiError(499, 'Operación cancelada.');
+    if (timedOut) throw new ApiError(0, 'El servidor tardó demasiado en responder. Inténtalo de nuevo.');
     throw new ApiError(0, 'No hay conexión con el servidor. Revisa tu red o la dirección configurada.');
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener('abort', onCancel);
   }
   if (res.status === 204) return undefined as T;
   let data: { error?: string } | null = null;
