@@ -170,12 +170,12 @@ describe('ruta /api/vision/dominoes', () => {
   );
 
   before(async () => {
-    const db = openDatabase(':memory:');
+    const db = await openDatabase({ dataDir: 'memory' });
     const pass = randomBytes(12).toString('hex');
-    db.prepare("INSERT INTO users (username, password_hash, role, active, created_at) VALUES ('mesa', ?, 'anotador', 1, ?)").run(
+    await db.run("INSERT INTO domino.users (username, password_hash, role, active, created_at) VALUES ('mesa', $1, 'anotador', 1, $2)", [
       hashPassword(pass),
       new Date().toISOString(),
-    );
+    ]);
     const app = createApp({ db, jwtSecret: randomBytes(48).toString('hex'), visionAnalyzer: createDominoAnalyzer({ client }) });
     await new Promise((r) => {
       server = app.listen(0, '127.0.0.1', r);

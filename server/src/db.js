@@ -1,6 +1,12 @@
-import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
+// Acceso a la base de datos PostgreSQL.
+// - Con DATABASE_URL: PostgreSQL real (Supabase u otro) mediante node-postgres.
+// - Sin DATABASE_URL: PGlite (PostgreSQL embebido) en una carpeta local, para desarrollo y pruebas.
+// Ambos usan exactamente el mismo SQL (sql/schema.sql), que se aplica al arrancar.
+import { existsSync, readFileSync } from 'node:fs';
+import { PGlite } from '@electric-sql/pglite';
+import pg from 'pg';
+
+export const SCHEMA_SQL = readFileSync(new URL('../sql/schema.sql', import.meta.url), 'utf8');
 
 export const DEFAULT_SETTINGS = Object.freeze({
   defaultTargets: [100, 150, 200],
@@ -8,116 +14,125 @@ export const DEFAULT_SETTINGS = Object.freeze({
   modes: { individual: true, parejas: true },
 });
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  username TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  password_hash TEXT NOT NULL,
-  role TEXT NOT NULL CHECK (role IN ('admin', 'anotador')),
-  active INTEGER NOT NULL DEFAULT 1,
-  token_version INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
-);
+/** Métodos comunes sobre un "ejecutor" (la base de datos o una transacción). */
+function queryApi(runner, rowCount) {
+  return {
+    async all(sql, params = []) {
+      return (await runner.query(sql, params)).rows;
+    },
+    async get(sql, params = []) {
+      return (await runner.query(sql, params)).rows[0];
+    },
+    async run(sql, params = []) {
+      const r = await runner.query(sql, params);
+      return { rows: r.rows, rowCount: rowCount(r) };
+    },
+  };
+}
 
-CREATE TABLE IF NOT EXISTS players (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-  active INTEGER NOT NULL DEFAULT 1,
-  created_at TEXT NOT NULL
-);
+function wrapPglite(pglite) {
+  const count = (r) => r.affectedRows ?? 0;
+  return {
+    kind: 'pglite',
+    ...queryApi(pglite, count),
+    exec: (sql) => pglite.exec(sql),
+    /** Ejecuta fn en una transacción; si lanza un error, se deshace todo. */
+    tx: (fn) => pglite.transaction((t) => fn(queryApi(t, count))),
+    close: () => pglite.close(),
+  };
+}
 
-CREATE TABLE IF NOT EXISTS games (
-  id TEXT PRIMARY KEY,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  finished_at TEXT,
-  status TEXT NOT NULL CHECK (status IN ('pendiente', 'terminada', 'cancelada')),
-  mode TEXT NOT NULL CHECK (mode IN ('individual', 'parejas')),
-  target INTEGER NOT NULL,
-  participants_json TEXT NOT NULL,
-  sides_json TEXT NOT NULL,
-  winner_side_id TEXT,
-  rematch_of TEXT,
-  revision INTEGER NOT NULL DEFAULT 0,
-  -- Revisión de la última corrección administrativa (0 = nunca corregida).
-  admin_revision INTEGER NOT NULL DEFAULT 0,
-  source_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL
-);
+function wrapPool(pool) {
+  const count = (r) => r.rowCount ?? 0;
+  return {
+    kind: 'postgres',
+    ...queryApi(pool, count),
+    exec: (sql) => pool.query(sql),
+    async tx(fn) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const result = await fn(queryApi(client, count));
+        await client.query('COMMIT');
+        return result;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
+    close: () => pool.end(),
+  };
+}
 
-CREATE TABLE IF NOT EXISTS game_players (
-  game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-  player_id INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
-  side_id TEXT NOT NULL,
-  PRIMARY KEY (game_id, player_id)
-);
+/**
+ * Configuración TLS. Supabase firma sus certificados con su propia autoridad, que no está
+ * en el sistema: para verificar el servidor hay que indicar su certificado raíz.
+ * - DATABASE_SSL_CA=ruta/al/certificado.crt  → cifrado y servidor verificado (recomendado).
+ * - DATABASE_SSL=no-verify                   → cifrado sin verificar el servidor (menos seguro).
+ * - DATABASE_SSL=disable                     → sin TLS (solo bases de datos locales).
+ * - sin nada                                 → cifrado verificado con las autoridades del sistema.
+ */
+function sslConfig(env) {
+  if (env.DATABASE_SSL === 'disable') return false;
+  if (env.DATABASE_SSL_CA) {
+    if (!existsSync(env.DATABASE_SSL_CA)) {
+      throw new Error(
+        `No se encontró el certificado ${env.DATABASE_SSL_CA}. Descárgalo en Supabase (Project Settings -> Database -> SSL Configuration) y guárdalo en esa ruta.`,
+      );
+    }
+    return { ca: readFileSync(env.DATABASE_SSL_CA, 'utf8'), rejectUnauthorized: true };
+  }
+  if (env.DATABASE_SSL === 'no-verify') {
+    console.warn('Aviso: conexión cifrada SIN verificar el certificado del servidor (DATABASE_SSL=no-verify).');
+    return { rejectUnauthorized: false };
+  }
+  return { rejectUnauthorized: true };
+}
 
-CREATE TABLE IF NOT EXISTS hands (
-  id TEXT PRIMARY KEY,
-  game_id TEXT NOT NULL REFERENCES games(id) ON DELETE CASCADE,
-  seq INTEGER NOT NULL,
-  side_id TEXT NOT NULL,
-  points INTEGER NOT NULL CHECK (points >= 0),
-  created_at TEXT NOT NULL,
-  edited_at TEXT
-);
-CREATE INDEX IF NOT EXISTS hands_game ON hands(game_id, seq);
+/** La configuración TLS se toma de las variables anteriores, no de parámetros de la URL. */
+function cleanUrl(url) {
+  const u = new URL(url);
+  for (const key of ['sslmode', 'sslrootcert', 'sslcert', 'sslkey', 'uselibpqcompat']) u.searchParams.delete(key);
+  return u.toString();
+}
 
-CREATE TABLE IF NOT EXISTS corrections (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  created_at TEXT NOT NULL,
-  admin_user_id INTEGER,
-  admin_username TEXT NOT NULL,
-  entity TEXT NOT NULL,
-  entity_id TEXT NOT NULL,
-  game_id TEXT,
-  action TEXT NOT NULL,
-  reason TEXT NOT NULL,
-  before_json TEXT,
-  after_json TEXT
-);
-
--- Partidas eliminadas por un administrador: impide que un dispositivo las vuelva a subir.
-CREATE TABLE IF NOT EXISTS deleted_games (
-  id TEXT PRIMARY KEY,
-  deleted_at TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS settings (
-  key TEXT PRIMARY KEY,
-  value_json TEXT NOT NULL
-);
-`;
-
-export function openDatabase(path) {
-  if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-  const db = new DatabaseSync(path);
-  db.exec('PRAGMA foreign_keys = ON;');
-  if (path !== ':memory:') db.exec('PRAGMA journal_mode = WAL;');
-  db.exec(SCHEMA);
+/**
+ * Abre la base de datos y aplica el esquema.
+ * @param {{ url?: string, dataDir?: string, env?: NodeJS.ProcessEnv }} options
+ *   url: cadena de conexión PostgreSQL; dataDir: carpeta de PGlite, o 'memory' para una base temporal.
+ */
+export async function openDatabase({ url, dataDir, env = process.env } = {}) {
+  let db;
+  if (url) {
+    const pool = new pg.Pool({
+      connectionString: cleanUrl(url),
+      ssl: sslConfig(env),
+      max: Number(env.DATABASE_POOL_MAX || 5),
+      connectionTimeoutMillis: 15_000,
+      idleTimeoutMillis: 30_000,
+    });
+    pool.on('error', (err) => console.error('Error en una conexión inactiva de la base de datos:', err.message));
+    db = wrapPool(pool);
+  } else {
+    const pglite = dataDir === 'memory' ? new PGlite() : new PGlite(dataDir || './data/pglite');
+    await pglite.waitReady;
+    db = wrapPglite(pglite);
+  }
+  await db.exec(SCHEMA_SQL);
   return db;
 }
 
-/** Runs fn inside a transaction; rolls back on any thrown error. */
-export function transaction(db, fn) {
-  db.exec('BEGIN');
-  try {
-    const result = fn();
-    db.exec('COMMIT');
-    return result;
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
-}
-
-export function getSettings(db) {
-  const row = db.prepare("SELECT value_json FROM settings WHERE key = 'game'").get();
+export async function getSettings(db) {
+  const row = await db.get("SELECT value_json FROM domino.settings WHERE key = 'game'");
   if (!row) return structuredClone(DEFAULT_SETTINGS);
   return { ...structuredClone(DEFAULT_SETTINGS), ...JSON.parse(row.value_json) };
 }
 
-export function saveSettings(db, settings) {
-  db.prepare(
-    "INSERT INTO settings (key, value_json) VALUES ('game', ?) ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
-  ).run(JSON.stringify(settings));
+export async function saveSettings(db, settings) {
+  await db.run(
+    "INSERT INTO domino.settings (key, value_json) VALUES ('game', $1) ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json",
+    [JSON.stringify(settings)],
+  );
 }

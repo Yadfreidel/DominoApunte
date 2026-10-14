@@ -47,19 +47,21 @@ if (weak) {
   process.exit(1);
 }
 
-const db = openDatabase(process.env.DATABASE_PATH || './data/domino.db');
-const existing = db.prepare('SELECT id FROM users WHERE username = ?').get(username);
+const db = await openDatabase({ url: process.env.DATABASE_URL, dataDir: process.env.PGLITE_DIR });
+const existing = await db.get('SELECT id FROM domino.users WHERE lower(username) = lower($1)', [username]);
 if (existing) {
-  db.prepare(
-    'UPDATE users SET password_hash = ?, role = ?, active = 1, token_version = token_version + 1 WHERE id = ?',
-  ).run(hashPassword(password), role, existing.id);
+  await db.run(
+    'UPDATE domino.users SET password_hash = $1, role = $2, active = 1, token_version = token_version + 1 WHERE id = $3',
+    [hashPassword(password), role, existing.id],
+  );
   console.log(`Usuario "${username}" actualizado (rol: ${role}). Sus sesiones anteriores quedaron cerradas.`);
 } else {
-  db.prepare('INSERT INTO users (username, password_hash, role, active, created_at) VALUES (?, ?, ?, 1, ?)').run(
+  await db.run('INSERT INTO domino.users (username, password_hash, role, active, created_at) VALUES ($1, $2, $3, 1, $4)', [
     username,
     hashPassword(password),
     role,
     new Date().toISOString(),
-  );
+  ]);
   console.log(`Usuario "${username}" creado con rol ${role}.`);
 }
+await db.close();

@@ -5,7 +5,7 @@ App móvil para anotar los puntos de partidas presenciales de dominó, con histo
 ```
 Dominos/
 ├── mobile/   App (React Native + Expo SDK 57 + TypeScript, Expo Router). También corre en web/escritorio.
-└── server/   API opcional (Node.js + Express + SQLite) para la administración compartida y la sincronización.
+└── server/   API opcional (Node.js + Express + PostgreSQL/Supabase) para la administración compartida y la sincronización.
 ```
 
 La app funciona completa **sin servidor y sin conexión**. El servidor solo hace falta para el panel de administración, compartir partidas entre dispositivos y el ranking global.
@@ -52,7 +52,7 @@ La app funciona completa **sin servidor y sin conexión**. El servidor solo hace
 
 ## Requisitos
 
-- **Node.js 22.13 o superior** (probado con Node 24). El servidor usa `node:sqlite`, que viene incluido en Node; no hay que compilar nada.
+- **Node.js 22 o superior** (probado con Node 24).
 - Para el teléfono: la app **Expo Go** (Android o iOS) en la misma red Wi‑Fi que la computadora, o un emulador.
 
 ---
@@ -99,7 +99,6 @@ npm start          # http://localhost:4000
 Notas:
 - `npm run create-user -- mesa1` crea un **anotador**: puede sincronizar partidas, pero no entra al panel. Los demás usuarios también se pueden crear desde el panel, en la sección Usuarios.
 - Repetir `create-admin` con un usuario existente le restablece la contraseña y cierra sus sesiones (útil si se olvida).
-- Node muestra el aviso `ExperimentalWarning: SQLite is an experimental feature`. Es esperado y no afecta el funcionamiento.
 
 ## 3. Conectar la app con el servidor
 
@@ -115,6 +114,61 @@ También puedes preconfigurar la dirección copiando `mobile/.env.example` como 
 
 ---
 
+## Base de datos en Supabase
+
+El servidor usa **PostgreSQL**. Si `DATABASE_URL` está vacío, usa PGlite (PostgreSQL embebido, guardado en `server/data/pglite`), así que puedes desarrollar sin Supabase. Con `DATABASE_URL` se conecta a Supabase o a cualquier otro PostgreSQL. En los dos casos se usa exactamente el mismo esquema.
+
+**Archivos de la base de datos:**
+
+| Archivo | Contenido |
+| --- | --- |
+| [`server/sql/schema.sql`](server/sql/schema.sql) | Esquema completo: 8 tablas, índices, restricciones y RLS. El servidor lo aplica solo al arrancar (es idempotente). |
+| [`server/sql/supabase-permisos.sql`](server/sql/supabase-permisos.sql) | Solo Supabase: quita todo acceso a los roles de la API pública (`anon`, `authenticated`, `service_role`). |
+
+**Tablas** (todas en el esquema privado `domino`):
+
+| Tabla | Para qué |
+| --- | --- |
+| `users` | Administradores y anotadores, con contraseña en scrypt y versión de sesión. |
+| `players` | Jugadores. El nombre es único sin distinguir mayúsculas. |
+| `games` | Partidas: estado, modalidad, meta, participantes, lados y revisiones. |
+| `game_players` | Quién jugó qué partida y de qué lado. |
+| `hands` | Manos de cada partida, en orden. Se borran junto con la partida. |
+| `corrections` | Registro de correcciones administrativas: fecha, responsable, motivo, antes y después. |
+| `deleted_games` | Partidas eliminadas, para que ningún dispositivo las vuelva a subir. |
+| `settings` | Metas predeterminadas y modalidades. |
+
+**Seguridad:** Supabase publica automáticamente una API REST sobre el esquema `public`, que se puede usar con la clave pública del proyecto. Por eso las tablas están en el esquema privado `domino`, que esa API no expone, con RLS activado y sin permisos para los roles públicos. Solo el servidor de la app, conectado con la cadena de PostgreSQL, puede leer y escribir. **No uses las claves `anon` / `service_role` de Supabase en la app**: no hacen falta.
+
+### Pasos para conectar el proyecto con Supabase
+
+1. **Crea el proyecto** en [supabase.com](https://supabase.com) → *New project*. Guarda la **contraseña de la base de datos**, la necesitarás en el paso 4.
+2. **Crea las tablas.** En *SQL Editor* → *New query*, pega el contenido de `server/sql/schema.sql` y pulsa **Run**. Luego haz lo mismo con `server/sql/supabase-permisos.sql`. Opcional: en *Table Editor* cambia el esquema a `domino` y verás las 8 tablas.
+3. **Descarga el certificado SSL.** Ve a *Project Settings* → *Database* → *SSL Configuration* → **Download certificate** y guárdalo como `server/supabase-ca.crt`. Con él, la conexión va cifrada y el servidor verifica que habla de verdad con Supabase.
+4. **Copia la cadena de conexión.** Pulsa el botón **Connect** (arriba en el panel) y elige según dónde vaya a correr el servidor:
+   - **Servidor que corre siempre** (tu PC, Render, Railway): *Session pooler*, puerto **5432**.
+   - **Vercel u otro serverless:** *Transaction pooler*, puerto **6543**, con `DATABASE_POOL_MAX=1`.
+
+   Reemplaza `[YOUR-PASSWORD]` por tu contraseña. Si tiene caracteres especiales (`@ : / # ?`), escríbelos codificados (`@` → `%40`).
+5. **Configura `server/.env`:**
+   ```env
+   DATABASE_URL=postgresql://postgres.abcdefghij:TU_CLAVE@aws-0-us-east-1.pooler.supabase.com:5432/postgres
+   DATABASE_SSL_CA=./supabase-ca.crt
+   DATABASE_POOL_MAX=5
+   ```
+6. **Crea el primer administrador** directamente en Supabase:
+   ```bash
+   cd server
+   npm run create-admin -- tuusuario
+   ```
+7. **Arranca el servidor** con `npm start`. Debe mostrar `Base de datos: PostgreSQL (DATABASE_URL)`.
+
+**Notas:**
+- `.env` y `supabase-ca.crt` no se suben a git.
+- Si el servidor muestra un error de certificado, revisa la ruta de `DATABASE_SSL_CA`. Como último recurso existe `DATABASE_SSL=no-verify`, que cifra pero no verifica el servidor.
+- Los datos de prueba que había en el servidor local (SQLite) no se migran: en Supabase empiezas con la base vacía. Las partidas guardadas en los teléfonos se suben solas cuando un usuario inicia sesión.
+- El plan gratuito de Supabase pausa el proyecto tras una semana sin uso; se reactiva desde el panel.
+
 ## Seguridad
 
 - **Autorización en el servidor:** todas las rutas `/api/admin/*` exigen un token válido, y en **cada petición** el servidor vuelve a cargar el usuario de la base de datos para verificar que siga activo, que su rol sea `admin` y que no se haya invalidado su sesión. Ocultar el menú solo afecta a la interfaz; un anotador que intenta entrar al panel o llamar a la API recibe `403`, y sin token se recibe `401`.
@@ -127,7 +181,7 @@ También puedes preconfigurar la dirección copiando `mobile/.env.example` como 
 ### Para producción
 - Pon la API detrás de **HTTPS**, por ejemplo con un proxy inverso como Caddy o Nginx. Sin HTTPS, contraseñas y tokens viajan en texto plano.
 - Si publicas la versión web, limita `CORS_ORIGINS` a su dominio.
-- Respalda periódicamente el archivo SQLite (`DATABASE_PATH`).
+- Respalda la base de datos (Supabase incluye copias diarias en sus planes de pago; en el gratuito, exporta desde el panel).
 - El bloqueo de intentos fallidos vive en memoria y se reinicia si se reinicia el servidor.
 
 ---
@@ -234,7 +288,7 @@ Se necesita una cuenta gratuita de Expo. Antes, agrega `android.package` / `ios.
 ```bash
 cd mobile && npm test          # reglas de partida, voz, conteo de fichas y recuperación (38 pruebas)
 cd mobile && npm run typecheck && npx expo lint
-cd server && npm test          # autenticación, permisos, sincronización, correcciones y visión simulada (33 pruebas)
+cd server && npm test          # autenticación, permisos, sincronización, correcciones, visión simulada y base de datos (39 pruebas)
 ```
 
 Además, se verificó la app web real contra la API con un navegador automatizado: 32 comprobaciones de creación, suma, edición, deshacer, ganador, recuperación tras recargar, revancha, historial, bloqueo de un anotador al entrar al panel, corrección administrativa y su llegada al dispositivo.
@@ -256,7 +310,8 @@ Los colores, la tipografía y los radios están centralizados en [`mobile/src/th
 | `mobile/src/components/` | Tarjetas de marcador, teclado numérico, menú, diálogos y secciones del panel |
 | `server/src/app.js` | Rutas de la API, validación y registro de correcciones |
 | `server/src/auth.js` | Hash de contraseñas, tokens y verificación de rol |
-| `server/src/db.js` | Esquema SQLite |
+| `server/src/db.js` | Conexión a PostgreSQL / PGlite |
+| `server/sql/schema.sql` | Esquema completo de la base de datos |
 
 ## Generar la app instalable
 

@@ -45,8 +45,7 @@ export function publicUser(user) {
  * de modo que desactivar un usuario, cambiarle el rol o la contraseña tenga efecto inmediato.
  */
 export function authenticate(db, secret) {
-  const findUser = db.prepare('SELECT * FROM users WHERE id = ?');
-  return (req, res, next) => {
+  return async (req, res, next) => {
     const header = req.get('authorization') ?? '';
     const match = /^Bearer (.+)$/i.exec(header);
     if (!match) return res.status(401).json({ error: 'Debes iniciar sesión.' });
@@ -56,7 +55,8 @@ export function authenticate(db, secret) {
     } catch {
       return res.status(401).json({ error: 'La sesión expiró o no es válida. Inicia sesión de nuevo.' });
     }
-    const user = findUser.get(Number(payload.sub));
+    const id = Number(payload.sub);
+    const user = Number.isInteger(id) ? await db.get('SELECT * FROM domino.users WHERE id = $1', [id]) : undefined;
     if (!user || !user.active || user.token_version !== payload.tv) {
       return res.status(401).json({ error: 'La sesión ya no es válida. Inicia sesión de nuevo.' });
     }

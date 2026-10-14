@@ -2,7 +2,6 @@ import { createApp } from './app.js';
 import { openDatabase } from './db.js';
 
 const port = Number(process.env.PORT || 4000);
-const databasePath = process.env.DATABASE_PATH || './data/domino.db';
 const jwtSecret = process.env.JWT_SECRET;
 
 if (!jwtSecret || jwtSecret.length < 32) {
@@ -10,8 +9,23 @@ if (!jwtSecret || jwtSecret.length < 32) {
   process.exit(1);
 }
 
-const db = openDatabase(databasePath);
-const admins = db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND active = 1").get().n;
+let db;
+try {
+  db = await openDatabase({ url: process.env.DATABASE_URL, dataDir: process.env.PGLITE_DIR });
+} catch (err) {
+  console.error('No se pudo abrir la base de datos:', err.message);
+  if (/certificate/i.test(err.message)) {
+    console.error('Configura DATABASE_SSL_CA con el certificado de Supabase (ver README, sección Supabase).');
+  }
+  process.exit(1);
+}
+console.log(
+  db.kind === 'postgres'
+    ? 'Base de datos: PostgreSQL (DATABASE_URL)'
+    : `Base de datos: PGlite local en ${process.env.PGLITE_DIR || './data/pglite'}`,
+);
+
+const { n: admins } = await db.get("SELECT COUNT(*)::int AS n FROM domino.users WHERE role = 'admin' AND active = 1");
 if (admins === 0) {
   console.warn('Aún no hay administradores. Crea uno con:  npm run create-admin -- <usuario>');
 }

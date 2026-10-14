@@ -56,12 +56,16 @@ function sampleGame(id, handPoints, overrides = {}) {
 }
 
 before(async () => {
-  db = openDatabase(':memory:');
-  const insert = db.prepare(
-    'INSERT INTO users (username, password_hash, role, active, created_at) VALUES (?, ?, ?, 1, ?)',
-  );
-  insert.run('admin', hashPassword(ADMIN_PASS), 'admin', new Date().toISOString());
-  insert.run('mesa1', hashPassword(SCORER_PASS), 'anotador', new Date().toISOString());
+  db = await openDatabase({ dataDir: 'memory' });
+  const insert = (username, pass, role) =>
+    db.run('INSERT INTO domino.users (username, password_hash, role, active, created_at) VALUES ($1, $2, $3, 1, $4)', [
+      username,
+      hashPassword(pass),
+      role,
+      new Date().toISOString(),
+    ]);
+  await insert('admin', ADMIN_PASS, 'admin');
+  await insert('mesa1', SCORER_PASS, 'anotador');
   const app = createApp({ db, jwtSecret: randomBytes(48).toString('hex') });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
