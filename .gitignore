@@ -1,0 +1,11 @@
+node_modules/
+.env
+*.db
+*.db-shm
+*.db-wal
+server/data/
+mobile/dist/
+mobile/.expo/
+.claude/
+QR-celular.png
+*.log
