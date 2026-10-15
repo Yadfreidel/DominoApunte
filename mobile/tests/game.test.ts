@@ -4,9 +4,10 @@ import { describe, test } from 'node:test';
 import {
   addHand,
   cancelGame,
-  computeStats,
   createGame,
   createRematch,
+  formatDuration,
+  gameDurationMs,
   editHand,
   filterGames,
   GameError,
@@ -48,26 +49,39 @@ describe('configuración de partida', () => {
     assert.equal(g.sides[0].participantIds.length, 2);
   });
 
-  test('parejas: basta un nombre por pareja; el compañero es opcional', () => {
-    const g = createGame({ playerCount: 4, names: ['Ana', '', 'Marta', 'Pedro'], mode: 'parejas', target: 100 }, T, ids);
-    assert.deepEqual(g.sides.map((s) => s.name), ['Ana', 'Marta y Pedro']);
-    assert.equal(g.participants.length, 3);
-    assert.equal(g.sides[0].participantIds.length, 1);
+  test('parejas: cada pareja necesita dos jugadores distintos y su nombre es editable', () => {
+    assert.match(validateSetup({ playerCount: 4, names: ['Ana', '', 'Marta', 'Pedro'], mode: 'parejas', target: 100 })!, /pareja 1 necesita dos/);
+    assert.match(validateSetup({ playerCount: 4, names: ['Ana', 'ana', 'Marta', 'Pedro'], mode: 'parejas', target: 100 })!, /dos veces/);
     assert.match(
-      validateSetup({ playerCount: 4, names: ['', '', 'Marta', ''], mode: 'parejas', target: 100 })!,
-      /pareja 1/,
+      validateSetup({ playerCount: 4, names: ['Ana', 'Luis', 'Marta', 'Pedro'], playerIds: ['p1', 'p2', 'p1', 'p4'], mode: 'parejas', target: 100 })!,
+      /dos veces/,
     );
     const named = createGame(
-      { playerCount: 4, names: ['Ana', '', 'Marta', ''], mode: 'parejas', target: 100, teamNames: ['Los Tigres', ''] },
+      { playerCount: 4, names: ['Ana', 'Luis', 'Marta', 'Pedro'], mode: 'parejas', target: 100, teamNames: ['Los Tigres', ''] },
       T,
       ids,
     );
-    assert.deepEqual(named.sides.map((s) => s.name), ['Los Tigres', 'Marta']);
+    assert.deepEqual(named.sides.map((s) => s.name), ['Los Tigres', 'Marta y Pedro']);
+    assert.equal(named.sides[0].participantIds.length, 2);
+  });
+
+  test('guarda identidad de jugadores, práctica y quién sale', () => {
+    const g = createGame(
+      { playerCount: 2, names: ['Ana', 'Luis'], playerIds: ['pA', 'pL'], mode: 'individual', target: 100, practice: true, starterIndex: 1 },
+      T,
+      ids,
+    );
+    assert.deepEqual(g.participants.map((p) => p.playerId), ['pA', 'pL']);
+    assert.equal(g.practice, true);
+    assert.equal(g.starterParticipantId, g.participants[1].id);
+    const r = createRematch(g, T, ids);
+    assert.deepEqual(r.participants.map((p) => p.playerId), ['pA', 'pL']);
+    assert.equal(r.starterParticipantId, null);
   });
 
   test('valida la configuración', () => {
     assert.match(validateSetup({ playerCount: 3, names: ['A', 'B', 'C'], mode: 'parejas', target: 100 })!, /4 jugadores/);
-    assert.match(validateSetup({ playerCount: 2, names: ['Ana', ' ana '], mode: 'individual', target: 100 })!, /repetidos/);
+    assert.match(validateSetup({ playerCount: 2, names: ['Ana', ' ana '], mode: 'individual', target: 100 })!, /dos veces/);
     assert.match(validateSetup({ playerCount: 2, names: ['Ana', '  '], mode: 'individual', target: 100 })!, /jugador 2/);
     assert.match(validateSetup({ playerCount: 5, names: [], mode: 'individual', target: 100 })!, /entre 2 y 4/);
     assert.equal(validateSetup({ playerCount: 2, names: ['Ana', 'Luis'], mode: 'individual', target: 175 }), null);
@@ -201,14 +215,14 @@ describe('historial y estadísticas', () => {
     assert.deepEqual(filterGames(all, { status: 'cancelada' }).map((g) => g.id), [g3.id]);
   });
 
-  test('estadísticas por jugador', () => {
+  test('duración real solo con fechas de inicio y fin válidas', () => {
     let g = couples(50);
-    g = addHand(g, g.sides[0].id, 50, 'h1', T);
-    const stats = computeStats([g, couples()]);
-    const ana = stats.find((s) => s.name === 'Ana')!;
-    const marta = stats.find((s) => s.name === 'Marta')!;
-    assert.deepEqual([ana.played, ana.wins, ana.losses, ana.pending, ana.winRate], [2, 1, 0, 1, 100]);
-    assert.deepEqual([marta.wins, marta.losses, marta.winRate], [0, 1, 0]);
+    assert.equal(gameDurationMs(g), null);
+    g = addHand(g, g.sides[0].id, 50, 'h1', '2026-10-14T20:42:00.000Z');
+    assert.equal(gameDurationMs(g), 42 * 60000);
+    assert.equal(formatDuration(42 * 60000), '42 min');
+    assert.equal(formatDuration(95 * 60000), '1 h 35 min');
+    assert.equal(gameDurationMs({ ...g, finishedAt: '2026-10-14T19:00:00.000Z' }), null);
   });
 });
 

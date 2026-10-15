@@ -16,7 +16,7 @@ La app funciona completa **sin servidor y sin conexión**. El servidor solo hace
 
 **Partidas**
 - Modalidad con dos tarjetas grandes: **Individual** (selector desplegable de 2, 3 o 4 jugadores) o **Por parejas** (2 parejas).
-- En parejas basta con escribir **un nombre por pareja**. El compañero es opcional ("Agregar compañero") y el nombre del equipo se forma solo, por ejemplo "Marta y Pedro".
+- En parejas cada pareja tiene **dos jugadores distintos** y un nombre de equipo editable; si se deja vacío se forma solo, por ejemplo "Marta y Pedro".
 - **Fotos de jugadores:** al tocar el círculo de cada jugador se puede tomar una foto o elegirla de la galería; si no tiene foto, se muestran sus iniciales. La foto se recorta en cuadrado, se reduce a 256 px y queda guardada en el dispositivo con el nombre del jugador, así que aparece en todas sus partidas. Las fotos no se envían al servidor.
 - Vista **"Así se enfrentan"** con las fotos o iniciales de cada lado y un "VS"; el marcador también muestra las fotos en cada tarjeta.
 - Los jugadores recientes aparecen con su foto para agregarlos con un toque.
@@ -49,6 +49,43 @@ La app funciona completa **sin servidor y sin conexión**. El servidor solo hace
 - Toda eliminación pide confirmación explícita.
 
 ---
+
+## Parejas, torneos, estadísticas, rivales y resumen
+
+**Conceptos.** Una **mano** es cada anotación de puntos. Una **partida** termina cuando un lado llega a la meta. Una **ronda** es una fase del cuadro de un torneo (cuartos, semifinal, final…). En la app y en los datos se distinguen siempre.
+
+**Una sola fuente de verdad.** Todo se calcula a partir de las partidas:
+
+- Se registran manos por un único camino (`mutateGame` en `AppStore`).
+- El avance del torneo, el campeón, las estadísticas y el historial entre rivales se **derivan** de las partidas terminadas.
+- Una corrección se refleja en todo a la vez, y no hay escrituras que puedan quedar a medias entre "resultado" y "avance".
+- Registrar una mano o crear la partida de un enfrentamiento es idempotente: un doble toque o un reintento no duplican nada.
+
+**Identidad de jugadores.** Cada persona tiene un ID estable en un registro local (`mobile/src/domain/players.ts`):
+
+- Al escribir un nombre ya registrado se reutiliza su ID.
+- Las partidas antiguas se vinculan una sola vez por nombre al abrir la app. No se inventa ningún otro dato.
+
+| Función | Dónde | Cómo funciona |
+| --- | --- | --- |
+| Partidas por parejas | Nueva partida | Dos jugadores distintos por pareja y nombre de equipo editable. Los puntos suman al equipo y el resultado se atribuye a ambos integrantes. No se puede repetir un jugador. |
+| Sorteos | Nueva partida / Nuevo torneo | **Sortear parejas** (exige cantidad par; editable antes de confirmar) y **Sortear quién sale**, con animación breve. Con "Reducir movimiento" (del sistema o en Configuración) se muestra sin animación. El sorteo confirmado se guarda: recargar no vuelve a sortear. |
+| Partida de práctica | Nueva partida | Se guarda, pero no cuenta para estadísticas, ranking ni rivales. |
+| Torneos | Menú → Torneos | Eliminación directa, individual o por parejas (parejas fijas toda la competencia). Cruces sorteados. Si la cantidad no es potencia de 2, hay **pases automáticos** repartidos e identificados (nunca pase contra pase). Solo avanza el ganador de una partida terminada; los pases no cuentan como victorias. Al terminar la final se muestra el campeón. Un resultado queda **cerrado** cuando la partida siguiente ya empezó, en la app y en el servidor. |
+| Estadísticas | Menú → Estadísticas | Por jugador y separadas en individual y parejas: jugadas, ganadas, perdidas, % de victorias, promedio de puntos por partida ("de su equipo" en parejas) y mejor racha. Solo partidas terminadas: excluye canceladas, pendientes, práctica y pases. Sin partidas muestra "—" en lugar de dividir por cero. |
+| Historial entre rivales | Menú → Rivales | Dos jugadores (por ID) o dos parejas (por sus integrantes, sin importar orden ni nombre del equipo). Muestra victorias de cada lado, marcadores y fechas, separado por modalidad. |
+| Resumen para WhatsApp | Al terminar una partida / Historial | Imagen PNG con nombres, ganador, marcador final, meta, duración y puntos por mano. La duración solo aparece si hay fecha real de inicio y fin. En el teléfono abre el menú nativo para compartir; en la web usa el menú del sistema si el navegador lo permite y, si no, descarga la imagen. |
+
+**Servidor y migración.** `server/sql/schema.sql` agrega, sin borrar datos (`ADD COLUMN IF NOT EXISTS`):
+
+- Las columnas `practice`, `starter_participant_id`, `tournament_id` y `match_id` en `domino.games`.
+- La tabla `domino.tournaments`, con RLS.
+
+El servidor la aplica solo al arrancar. Las partidas antiguas quedan como no-práctica y sin torneo. Además:
+
+- La sincronización envía torneos y conserva la identidad de jugadores.
+- El ranking del panel excluye las partidas de práctica.
+- Las correcciones administrativas de una partida de torneo se rechazan (409) si el enfrentamiento siguiente ya empezó.
 
 ## Requisitos
 
@@ -286,9 +323,9 @@ Se necesita una cuenta gratuita de Expo. Antes, agrega `android.package` / `ios.
 ## Pruebas
 
 ```bash
-cd mobile && npm test          # reglas de partida, voz, conteo de fichas y recuperación (38 pruebas)
+cd mobile && npm test          # reglas, torneos, estadísticas, sorteos, rivales, resumen, voz y persistencia (65 pruebas)
 cd mobile && npm run typecheck && npx expo lint
-cd server && npm test          # autenticación, permisos, sincronización, correcciones, visión simulada y base de datos (39 pruebas)
+cd server && npm test          # autenticación, permisos, sincronización, torneos, migración, visión simulada y base de datos (45 pruebas)
 ```
 
 Además, se verificó la app web real contra la API con un navegador automatizado: 32 comprobaciones de creación, suma, edición, deshacer, ganador, recuperación tras recargar, revancha, historial, bloqueo de un anotador al entrar al panel, corrección administrativa y su llegada al dispositivo.

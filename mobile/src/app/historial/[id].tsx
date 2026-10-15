@@ -5,8 +5,11 @@ import { AppHeader } from '@/components/AppHeader';
 import { useDialogs } from '@/components/Dialogs';
 import { formatDateTime, modeLabel } from '@/components/GameSummary';
 import { HandLedger, ScoreCard } from '@/components/Score';
+import { SummaryShare } from '@/components/SummaryShare';
 import { Button, Card, EmptyState, Screen, StatusBadge } from '@/components/ui';
-import { sideLabel, totals as computeTotals } from '@/domain/game.ts';
+import { formatDuration, gameDurationMs, sideLabel, totals as computeTotals } from '@/domain/game.ts';
+import { findMatch, resolveTournament } from '@/domain/tournament.ts';
+import { useState } from 'react';
 import { useStore } from '@/state/AppStore';
 import { colors, space } from '@/theme';
 import { goBackOr } from '@/navigation';
@@ -17,6 +20,7 @@ export default function HistoryDetail() {
   const store = useStore();
   const { toast } = useDialogs();
   const game = store.games.find((g) => g.id === id);
+  const [shareOpen, setShareOpen] = useState(false);
 
   if (!game) {
     return (
@@ -34,6 +38,10 @@ export default function HistoryDetail() {
   const totals = computeTotals(game);
   const isCurrent = store.currentGame?.id === game.id;
   const winner = game.sides.find((sd) => sd.id === game.winnerSideId);
+  const tournament = game.tournamentId ? store.tournaments.find((t) => t.id === game.tournamentId) ?? null : null;
+  const tMatch = tournament && game.matchId ? findMatch(resolveTournament(tournament, store.games), game.matchId) : undefined;
+  const context = tournament ? `${tournament.name} · ${tMatch?.roundName ?? 'Torneo'}` : undefined;
+  const duration = gameDurationMs(game);
 
   const resume = async () => {
     await store.resumeGame(game.id);
@@ -62,7 +70,11 @@ export default function HistoryDetail() {
         <Text style={s.meta}>
           {modeLabel(game.mode)} · meta {game.target} puntos · {game.hands.length} manos
         </Text>
+        <Text style={s.meta}>Inicio: {formatDateTime(game.createdAt)}</Text>
         {game.finishedAt ? <Text style={s.meta}>Terminó: {formatDateTime(game.finishedAt)}</Text> : null}
+        {duration != null ? <Text style={s.meta}>Duración: {formatDuration(duration)}</Text> : null}
+        {context ? <Text style={s.meta}>Torneo: {context}</Text> : null}
+        {game.practice ? <Text style={s.meta}>Partida de práctica (no cuenta para estadísticas)</Text> : null}
         <Text style={s.meta}>Participantes: {game.participants.map((p) => p.name).join(', ')}</Text>
         {winner ? (
           <View style={s.winnerRow}>
@@ -107,7 +119,13 @@ export default function HistoryDetail() {
       {game.status === 'pendiente' ? (
         <Button label={isCurrent ? 'Ir a la partida en curso' : 'Continuar esta partida'} icon="play" onPress={resume} />
       ) : null}
-      {game.status === 'terminada' ? <Button label="Jugar revancha" icon="refresh" variant="outline" onPress={rematch} /> : null}
+      {game.status === 'terminada' && !game.tournamentId ? (
+        <Button label="Jugar revancha" icon="refresh" variant="outline" onPress={rematch} />
+      ) : null}
+      {game.status === 'terminada' ? (
+        <Button label="Compartir resumen" icon="share-social-outline" variant="outline" onPress={() => setShareOpen(true)} />
+      ) : null}
+      {shareOpen ? <SummaryShare game={game} context={context} onClose={() => setShareOpen(false)} /> : null}
     </Screen>
   );
 }

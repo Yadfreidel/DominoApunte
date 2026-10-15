@@ -103,6 +103,32 @@ CREATE TABLE IF NOT EXISTS domino.settings (
   value_json  TEXT NOT NULL
 );
 
+-- ---------------------------------------------------------------------
+-- Migración 2026-10 (idempotente, no borra datos): partidas de práctica,
+-- quién sale, vínculo con torneos y tabla de torneos.
+-- Las partidas anteriores quedan con practice = 0 y sin torneo.
+-- ---------------------------------------------------------------------
+ALTER TABLE domino.games ADD COLUMN IF NOT EXISTS practice INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE domino.games ADD COLUMN IF NOT EXISTS starter_participant_id TEXT;
+ALTER TABLE domino.games ADD COLUMN IF NOT EXISTS tournament_id TEXT;
+ALTER TABLE domino.games ADD COLUMN IF NOT EXISTS match_id TEXT;
+CREATE INDEX IF NOT EXISTS games_tournament_idx ON domino.games (tournament_id, match_id);
+
+-- Torneos de eliminación directa. data_json guarda participantes (jugadores o parejas fijas) y
+-- el cuadro con los cruces de la primera ronda; el avance se deriva de las partidas vinculadas.
+CREATE TABLE IF NOT EXISTS domino.tournaments (
+  id              TEXT    PRIMARY KEY,
+  name            TEXT    NOT NULL,
+  mode            TEXT    NOT NULL CHECK (mode IN ('individual', 'parejas')),
+  target          INTEGER NOT NULL CHECK (target > 0),
+  status          TEXT    NOT NULL CHECK (status IN ('activo', 'cancelado')),
+  data_json       TEXT    NOT NULL,
+  created_at      TEXT    NOT NULL,
+  updated_at      TEXT    NOT NULL,
+  revision        INTEGER NOT NULL DEFAULT 0,
+  source_user_id  INTEGER REFERENCES domino.users (id) ON DELETE SET NULL
+);
+
 -- Seguridad adicional: RLS activado sin políticas. El servidor se conecta como
 -- dueño de las tablas y no se ve afectado; cualquier otro rol queda bloqueado.
 ALTER TABLE domino.users         ENABLE ROW LEVEL SECURITY;
@@ -113,3 +139,4 @@ ALTER TABLE domino.hands         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domino.corrections   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domino.deleted_games ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domino.settings      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE domino.tournaments   ENABLE ROW LEVEL SECURITY;

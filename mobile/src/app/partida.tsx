@@ -6,9 +6,11 @@ import { AppHeader } from '@/components/AppHeader';
 import { useDialogs } from '@/components/Dialogs';
 import { NumericKeypad, type KeypadSide } from '@/components/NumericKeypad';
 import { VoiceScoreSheet } from '@/components/VoiceScoreSheet';
+import { SummaryShare } from '@/components/SummaryShare';
 import { HandLedger, ScoreCard } from '@/components/Score';
 import { Button, Card, EmptyState, Screen } from '@/components/ui';
-import { newId, sideLabel, totals as computeTotals } from '@/domain/game.ts';
+import { formatDuration, gameDurationMs, newId, sideLabel, totals as computeTotals } from '@/domain/game.ts';
+import { findMatch, resolveTournament } from '@/domain/tournament.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, sideColor, space } from '@/theme';
 import { useGoTo } from '@/navigation';
@@ -26,6 +28,7 @@ export default function Scoreboard() {
   const [browseState, setBrowseState] = useState<{ key: string; index: number | null }>({ key: '', index: null });
   const [busy, setBusy] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const goTo = useGoTo();
   const browseKey = `${game?.id}:${game?.hands.length}`;
   const browse = browseState.key === browseKey ? browseState.index : null;
@@ -164,8 +167,49 @@ export default function Scoreboard() {
     }
   };
 
+  const tournament = game.tournamentId ? store.tournaments.find((t) => t.id === game.tournamentId) ?? null : null;
+  const tMatch = tournament && game.matchId ? findMatch(resolveTournament(tournament, store.games), game.matchId) : undefined;
+  const context = tournament ? `${tournament.name} · ${tMatch?.roundName ?? 'Torneo'}` : undefined;
+  const locked = store.lockReasonFor(game);
+  const starter = game.starterParticipantId ? game.participants.find((p) => p.id === game.starterParticipantId) : undefined;
+  const duration = gameDurationMs(game);
+
   return (
     <Screen header={<AppHeader subtitle={`Partida a ${game.target} puntos`} />}>
+      {tournament ? (
+        <Pressable
+          onPress={() => goTo({ pathname: '/torneos/[id]', params: { id: tournament.id } })}
+          accessibilityRole="button"
+          accessibilityLabel={`Ver el cuadro del torneo ${tournament.name}`}
+          style={({ pressed }) => [s.notice, s.tournamentBar, pressed && { opacity: 0.8 }]}
+        >
+          <Ionicons name="trophy-outline" size={18} color={colors.warning} />
+          <Text style={s.noticeText} numberOfLines={1}>
+            {context}
+          </Text>
+          <Text style={s.link}>Ver cuadro</Text>
+        </Pressable>
+      ) : null}
+      {game.practice ? (
+        <View style={s.notice}>
+          <Ionicons name="flask-outline" size={18} color={colors.textMuted} />
+          <Text style={s.noticeText}>Partida de práctica: no cuenta para estadísticas.</Text>
+        </View>
+      ) : null}
+      {locked ? (
+        <View style={s.notice}>
+          <Ionicons name="lock-closed" size={18} color={colors.warning} />
+          <Text style={s.noticeText}>{locked}</Text>
+        </View>
+      ) : null}
+      {starter && pending && handCount === 0 ? (
+        <View style={s.notice}>
+          <Ionicons name="play" size={18} color={colors.lime} />
+          <Text style={s.noticeText}>
+            Sale: <Text style={{ color: colors.lime, fontWeight: '800' }}>{starter.name}</Text>
+          </Text>
+        </View>
+      ) : null}
       {game.adminLocked ? (
         <View style={s.notice}>
           <Ionicons name="shield-checkmark" size={18} color={colors.purple} />
@@ -205,11 +249,22 @@ export default function Scoreboard() {
           {team && sideLabel(game, winner) !== winner.name ? <Text style={s.winnerSub}>{sideLabel(game, winner)}</Text> : null}
           <Text style={s.winnerSub}>
             {totals[winner.id]} puntos · meta {game.target} · {handCount} manos
+            {duration != null ? ` · ${formatDuration(duration)}` : ''}
           </Text>
           <View style={s.winnerActions}>
-            <Button label="Revancha" icon="refresh" onPress={rematch} loading={busy} style={{ flex: 1 }} />
+            {tournament ? (
+              <Button
+                label="Volver al torneo"
+                icon="trophy-outline"
+                onPress={() => goTo({ pathname: '/torneos/[id]', params: { id: tournament.id } })}
+                style={{ flex: 1 }}
+              />
+            ) : (
+              <Button label="Revancha" icon="refresh" onPress={rematch} loading={busy} style={{ flex: 1 }} />
+            )}
             <Button label="Nueva" icon="add" variant="outline" onPress={() => goTo('/nueva')} style={{ flex: 1 }} />
           </View>
+          <Button label="Compartir resumen" icon="share-social-outline" variant="outline" onPress={() => setShareOpen(true)} style={{ alignSelf: 'stretch' }} />
         </Card>
       ) : null}
 
@@ -323,6 +378,8 @@ export default function Scoreboard() {
         />
       ) : null}
 
+      {shareOpen ? <SummaryShare game={game} context={context} onClose={() => setShareOpen(false)} /> : null}
+
       <NumericKeypad
         key={keypad?.handId ?? 'cerrado'}
         visible={!!keypad}
@@ -347,6 +404,8 @@ const s = StyleSheet.create({
     borderRadius: radius.md,
     padding: space.md,
   },
+  tournamentBar: { backgroundColor: 'rgba(255, 193, 69, 0.1)' },
+  link: { color: colors.warning, fontWeight: '700', fontSize: 14 },
   noticeText: { color: colors.text, fontSize: 14, flex: 1 },
   cards: { flexDirection: 'row', gap: space.md },
   vs: {

@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import { useState } from 'react';
-import { Platform, Pressable, StyleSheet, Text, TextInput, View, type TextStyle } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Platform, Pressable, StyleSheet, Switch, Text, TextInput, View, type TextStyle } from 'react-native';
 import { AppHeader } from '@/components/AppHeader';
 import { Avatar, PlayerPhotoButton, VersusBanner, type VersusSide } from '@/components/Avatar';
 import { useDialogs } from '@/components/Dialogs';
-import { Button, Card, ErrorText, Field, Label, Pill, Screen, Select, type IconName } from '@/components/ui';
-import { coupleName, couples, MAX_NAME_LENGTH, nameKey, parseTarget, validateSetup, type Mode } from '@/domain/game.ts';
+import { StarterDraw } from '@/components/StarterDraw';
+import { Button, Card, ErrorText, Field, Label, Loading, Pill, Screen, Select, type IconName } from '@/components/ui';
+import { DrawError, drawPairs } from '@/domain/draw.ts';
+import { coupleName, MAX_NAME_LENGTH, nameKey, normalizeName, parseTarget, validateSetup, type Mode } from '@/domain/game.ts';
+import type { SetupDraft } from '@/domain/repository.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, sideColor, space } from '@/theme';
 
@@ -24,13 +27,47 @@ export default function NewGame() {
 
   const [countChoice, setCountChoice] = useState(2);
   const [modeChoice, setModeChoice] = useState<Mode>('individual');
-  /** Individual: un nombre por jugador. Parejas: [pareja 1, compañero 1, pareja 2, compañero 2]. */
+  /** Individual: un nombre por jugador. Parejas: [pareja 1 A, pareja 1 B, pareja 2 A, pareja 2 B]. */
   const [names, setNames] = useState(['', '', '', '']);
-  const [partnerShown, setPartnerShown] = useState<[boolean, boolean]>([false, false]);
+  const [teamNames, setTeamNames] = useState<[string, string]>(['', '']);
+  const [starterIndex, setStarterIndex] = useState<number | null>(null);
+  const [practice, setPractice] = useState(false);
   const [targetPick, setTargetChoice] = useState<number | 'otra'>(settings.defaultTarget);
   const [customTarget, setCustomTarget] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const started = useRef(false);
+
+  // Recupera el borrador: los sorteos confirmados no se repiten al recargar.
+  const { loadSetupDraft, saveSetupDraft } = store;
+  useEffect(() => {
+    let alive = true;
+    loadSetupDraft().then(
+      (d) => {
+        if (!alive) return;
+        if (d) {
+          setModeChoice(d.mode);
+          setCountChoice(d.countChoice);
+          setNames(d.names.length === 4 ? d.names : ['', '', '', '']);
+          setTeamNames(d.teamNames);
+          setStarterIndex(d.starterIndex);
+          setPractice(d.practice);
+        }
+        setDraftLoaded(true);
+      },
+      () => alive && setDraftLoaded(true),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [loadSetupDraft]);
+
+  useEffect(() => {
+    if (!draftLoaded || started.current) return;
+    const draft: SetupDraft = { mode: modeChoice, countChoice, names, teamNames, starterIndex, practice };
+    void saveSetupDraft(draft);
+  }, [draftLoaded, modeChoice, countChoice, names, teamNames, starterIndex, practice, saveSetupDraft]);
 
   // La selección efectiva respeta siempre las metas y modalidades vigentes (pueden cambiar al sincronizar).
   const mode: Mode = !individualAllowed ? 'parejas' : !parejasAllowed ? 'individual' : modeChoice;
@@ -39,20 +76,24 @@ export default function NewGame() {
     targetPick !== 'otra' && !settings.targets.includes(targetPick) ? settings.defaultTarget : targetPick;
   const target = targetChoice === 'otra' ? parseTarget(customTarget) : ({ ok: true, value: targetChoice } as const);
 
-  /** Nombres que realmente se usan (en parejas, el compañero oculto no cuenta). */
-  const effectiveNames =
-    mode === 'parejas'
-      ? [names[0], partnerShown[0] ? names[1] : '', names[2], partnerShown[1] ? names[3] : '']
-      : names.slice(0, count);
+  const effectiveNames = names.slice(0, count);
+  const starter = starterIndex != null && starterIndex < count ? starterIndex : null;
+
+  const teamLabel = (pair: 0 | 1) => {
+    const members = [names[pair * 2], names[pair * 2 + 1]].map(normalizeName).filter(Boolean);
+    return normalizeName(teamNames[pair]) || (members.length ? coupleName(members) : `Pareja ${pair + 1}`);
+  };
 
   const versus: VersusSide[] =
     mode === 'parejas'
-      ? couples(effectiveNames).map((members, i) => ({ name: members.length ? coupleName(members) : `Pareja ${i + 1}`, members }))
+      ? ([0, 1] as const).map((pair) => ({
+          name: teamLabel(pair),
+          members: [names[pair * 2], names[pair * 2 + 1]].map(normalizeName).filter(Boolean),
+        }))
       : effectiveNames.map((n, i) => ({ name: n.trim() || `Jugador ${i + 1}`, members: n.trim() ? [n.trim()] : [] }));
 
   const chooseMode = (m: Mode) => {
     setModeChoice(m);
-    if (m === 'parejas') setPartnerShown([!!names[1].trim(), !!names[3].trim()]);
     setError(null);
   };
 
@@ -66,25 +107,48 @@ export default function NewGame() {
 
   /** Coloca un jugador reciente en el primer lugar vacío. */
   const fillNext = (name: string) => {
-    const slots = mode === 'parejas' ? [0, 2, ...(partnerShown[0] ? [1] : []), ...(partnerShown[1] ? [3] : [])] : [0, 1, 2, 3].slice(0, count);
-    const i = slots.find((slot) => !names[slot].trim());
+    const i = [0, 1, 2, 3].slice(0, count).find((slot) => !names[slot].trim());
     if (i == null) return toast('Todos los lugares están ocupados.', 'info');
     setName(i, name);
   };
 
-  const togglePartner = (pair: 0 | 1, show: boolean) => {
-    setPartnerShown((prev) => (pair === 0 ? [show, prev[1]] : [prev[0], show]));
-    if (!show) setName(pair * 2 + 1, '');
+  /** Forma las dos parejas al azar con los cuatro jugadores escritos (luego se pueden editar). */
+  const drawTeams = () => {
+    const filled = names.slice(0, 4).map(normalizeName);
+    if (filled.some((n) => !n)) return setError('Escribe los cuatro jugadores antes de sortear las parejas.');
+    if (new Set(filled.map(nameKey)).size !== 4) return setError('Hay jugadores repetidos.');
+    try {
+      const pairs = drawPairs(filled);
+      const starterName = starter != null ? filled[starter] : null;
+      const next = pairs.flat();
+      setNames(next);
+      setTeamNames(['', '']);
+      setStarterIndex(starterName ? next.indexOf(starterName) : null);
+      setError(null);
+      toast(`Parejas: ${coupleName(pairs[0])} contra ${coupleName(pairs[1])}`, 'info');
+    } catch (err) {
+      setError(err instanceof DrawError ? err.message : 'No se pudo sortear.');
+    }
   };
 
   const start = async () => {
     if (!target.ok) return setError(target.error);
-    const setup = { playerCount: count, names: effectiveNames, mode, target: target.value };
+    const setup = {
+      playerCount: count,
+      names: effectiveNames,
+      mode,
+      target: target.value,
+      teamNames: mode === 'parejas' ? teamNames : undefined,
+      practice,
+      starterIndex: starter,
+    };
     const problem = validateSetup(setup);
     if (problem) return setError(problem);
     setSaving(true);
     try {
       await store.startGame(setup);
+      started.current = true;
+      await store.saveSetupDraft(null);
       toast('Partida creada. ¡Buena suerte!');
       router.dismissTo('/partida');
     } catch (err) {
@@ -94,7 +158,7 @@ export default function NewGame() {
     }
   };
 
-  const playerRow = (slot: number, colorIndex: number, label: string, placeholder: string, onRemove?: () => void) => (
+  const playerRow = (slot: number, colorIndex: number, label: string, placeholder: string) => (
     <View key={slot} style={[s.playerRow, { borderColor: `${sideColor(colorIndex).main}55` }]}>
       <PlayerPhotoButton name={names[slot]} colorIndex={colorIndex} size={52} />
       <View style={{ flex: 1 }}>
@@ -112,13 +176,16 @@ export default function NewGame() {
           style={[s.playerInput, webNoOutline]}
         />
       </View>
-      {onRemove ? (
-        <Pressable onPress={onRemove} accessibilityRole="button" accessibilityLabel="Quitar compañero" hitSlop={8} style={s.remove}>
-          <Ionicons name="close-circle" size={24} color={colors.textDim} />
-        </Pressable>
-      ) : null}
     </View>
   );
+
+  if (!draftLoaded) {
+    return (
+      <Screen header={<AppHeader subtitle="Nueva partida" />}>
+        <Loading />
+      </Screen>
+    );
+  }
 
   return (
     <Screen header={<AppHeader subtitle="Nueva partida" />}>
@@ -185,30 +252,32 @@ export default function NewGame() {
             {Array.from({ length: count }, (_, i) => playerRow(i, i, `Jugador ${i + 1}`, 'Nombre'))}
           </>
         ) : (
-          ([0, 1] as const).map((pair) => {
-            const c = sideColor(pair);
-            return (
-              <View key={pair} style={[s.pair, { borderColor: c.main, backgroundColor: c.soft }]}>
-                <View style={s.pairHeader}>
-                  <Ionicons name="people" size={18} color={c.main} />
-                  <Text style={[s.pairTitle, { color: c.main }]}>Pareja {pair + 1}</Text>
+          <>
+            {([0, 1] as const).map((pair) => {
+              const c = sideColor(pair);
+              return (
+                <View key={pair} style={[s.pair, { borderColor: c.main, backgroundColor: c.soft }]}>
+                  <View style={s.pairHeader}>
+                    <Ionicons name="people" size={18} color={c.main} />
+                    <TextInput
+                      value={teamNames[pair]}
+                      onChangeText={(t) => setTeamNames((prev) => (pair === 0 ? [t, prev[1]] : [prev[0], t]))}
+                      placeholder={teamLabel(pair)}
+                      placeholderTextColor={`${c.main}AA`}
+                      maxLength={MAX_NAME_LENGTH}
+                      accessibilityLabel={`Nombre de la pareja ${pair + 1}`}
+                      style={[s.teamInput, { color: c.main }, webNoOutline]}
+                    />
+                    <Ionicons name="create-outline" size={16} color={`${c.main}AA`} />
+                  </View>
+                  {playerRow(pair * 2, pair, 'Jugador 1', 'Nombre')}
+                  {playerRow(pair * 2 + 1, pair, 'Jugador 2', 'Nombre')}
                 </View>
-                {playerRow(pair * 2, pair, 'Jugador', 'Nombre (obligatorio)')}
-                {partnerShown[pair] ? (
-                  playerRow(pair * 2 + 1, pair, 'Compañero', 'Nombre (opcional)', () => togglePartner(pair, false))
-                ) : (
-                  <Pressable
-                    onPress={() => togglePartner(pair, true)}
-                    accessibilityRole="button"
-                    style={({ pressed }) => [s.addPartner, { borderColor: `${c.main}88` }, pressed && { opacity: 0.7 }]}
-                  >
-                    <Ionicons name="person-add-outline" size={18} color={c.main} />
-                    <Text style={[s.addPartnerText, { color: c.main }]}>Agregar compañero (opcional)</Text>
-                  </Pressable>
-                )}
-              </View>
-            );
-          })
+              );
+            })}
+            <Button label="Sortear parejas" icon="shuffle" variant="outline" size="sm" onPress={drawTeams} />
+            <Text style={s.cardHint}>Mezcla a los cuatro jugadores en dos parejas al azar. Puedes editarlas antes de empezar.</Text>
+          </>
         )}
 
         {suggestions.length ? (
@@ -238,6 +307,12 @@ export default function NewGame() {
         <VersusBanner sides={versus} />
       </Card>
 
+      {/* Quién sale */}
+      <Card style={s.section}>
+        <Text style={s.cardTitle}>¿Quién sale?</Text>
+        <StarterDraw names={effectiveNames} value={starter} onResult={setStarterIndex} />
+      </Card>
+
       {/* Meta */}
       <Card style={s.section}>
         <Text style={s.cardTitle}>Meta de la partida</Text>
@@ -261,6 +336,19 @@ export default function NewGame() {
             error={customTarget && !target.ok ? target.error : null}
           />
         ) : null}
+        <View style={s.toggle}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.toggleLabel}>Partida de práctica</Text>
+            <Text style={s.cardHint}>Se guarda en el historial pero no cuenta para estadísticas ni rivales.</Text>
+          </View>
+          <Switch
+            value={practice}
+            onValueChange={setPractice}
+            trackColor={{ false: colors.border, true: colors.limeDeep }}
+            thumbColor={practice ? colors.lime : '#C9CEE6'}
+            accessibilityLabel="Partida de práctica"
+          />
+        </View>
       </Card>
 
       {error ? <ErrorText>{error}</ErrorText> : null}
@@ -354,21 +442,9 @@ const s = StyleSheet.create({
   },
   playerLabel: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8 },
   playerInput: { color: colors.text, fontSize: 19, fontWeight: '600', paddingVertical: 6, minHeight: 40 },
-  remove: { padding: 4 },
   pair: { gap: space.sm, borderWidth: 1.5, borderRadius: radius.lg, padding: space.md },
   pairHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  pairTitle: { fontFamily: fonts.heading, fontSize: 19 },
-  addPartner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: space.sm,
-    minHeight: 46,
-    borderRadius: radius.md,
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-  },
-  addPartnerText: { fontSize: 15, fontWeight: '700' },
+  teamInput: { flex: 1, fontFamily: fonts.heading, fontSize: 19, minHeight: 36, paddingVertical: 4 },
   recent: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -384,6 +460,8 @@ const s = StyleSheet.create({
   recentText: { color: colors.text, fontSize: 15, fontWeight: '600' },
   versusCard: { gap: space.md, paddingVertical: space.lg },
   versusTitle: { color: colors.textMuted, fontSize: 13, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, textAlign: 'center' },
+  toggle: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  toggleLabel: { color: colors.text, fontSize: 16, fontWeight: '600' },
   resume: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   resumeTitle: { color: colors.text, fontWeight: '700', fontSize: 16 },
   resumeText: { color: colors.textMuted, fontSize: 14 },

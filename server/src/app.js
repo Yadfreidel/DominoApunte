@@ -62,7 +62,12 @@ export function validateIncomingGame(g) {
   }
   const participants = g.participants.map((p) => {
     if (!ID_RE.test(p?.id ?? '')) throw bad('Jugador inválido.');
-    return { id: p.id, name: cleanName(p.name, 'El nombre del jugador') };
+    const out = { id: p.id, name: cleanName(p.name, 'El nombre del jugador') };
+    if (p.playerId !== undefined && p.playerId !== null) {
+      if (!ID_RE.test(p.playerId)) throw bad('Identificador de jugador inválido.');
+      out.playerId = p.playerId;
+    }
+    return out;
   });
   const participantIds = new Set(participants.map((p) => p.id));
   if (participantIds.size !== participants.length) throw bad('Jugadores repetidos.');
@@ -72,7 +77,12 @@ export function validateIncomingGame(g) {
     if (!Array.isArray(s.participantIds) || s.participantIds.some((id) => !participantIds.has(id))) {
       throw bad('Lado con jugadores desconocidos.');
     }
-    return { id: s.id, name: cleanName(s.name, 'El nombre del equipo'), participantIds: [...s.participantIds] };
+    const out = { id: s.id, name: cleanName(s.name, 'El nombre del equipo'), participantIds: [...s.participantIds] };
+    if (s.entrantId !== undefined && s.entrantId !== null) {
+      if (!ID_RE.test(s.entrantId)) throw bad('Participante de torneo inválido.');
+      out.entrantId = s.entrantId;
+    }
+    return out;
   });
   if (sides.some((s) => s.participantIds.length < 1 || s.participantIds.length > 2)) {
     throw bad('Cada lado debe tener uno o dos jugadores.');
@@ -113,7 +123,64 @@ export function validateIncomingGame(g) {
     rematchOf: typeof g.rematchOf === 'string' && ID_RE.test(g.rematchOf) ? g.rematchOf : null,
     revision: g.revision,
     adminRevision: Number.isInteger(g.adminRevision) && g.adminRevision >= 0 ? g.adminRevision : 0,
+    practice: g.practice === true,
+    starterParticipantId:
+      typeof g.starterParticipantId === 'string' && participantIds.has(g.starterParticipantId) ? g.starterParticipantId : null,
+    tournamentId: typeof g.tournamentId === 'string' && ID_RE.test(g.tournamentId) ? g.tournamentId : null,
+    matchId: typeof g.matchId === 'string' && ID_RE.test(g.matchId) ? g.matchId : null,
   };
+}
+
+/** Valida un torneo enviado por un dispositivo. Devuelve una copia normalizada. */
+export function validateIncomingTournament(t) {
+  if (!t || typeof t !== 'object' || !ID_RE.test(t.id ?? '')) throw bad('Torneo inválido.');
+  const name = cleanName(t.name, 'El nombre del torneo');
+  if (!MODES.includes(t.mode)) throw bad('Modalidad de torneo inválida.');
+  if (!Number.isInteger(t.target) || t.target < 1 || t.target > MAX_TARGET) throw bad('Meta de torneo inválida.');
+  if (t.status !== 'activo' && t.status !== 'cancelado') throw bad('Estado de torneo inválido.');
+  if (!isIsoDate(t.createdAt) || !isIsoDate(t.updatedAt)) throw bad('Fechas de torneo inválidas.');
+  if (!Number.isInteger(t.revision) || t.revision < 0) throw bad('Revisión de torneo inválida.');
+  if (!Array.isArray(t.entrants) || t.entrants.length < 2 || t.entrants.length > 64) throw bad('Participantes de torneo inválidos.');
+  const size = t.mode === 'parejas' ? 2 : 1;
+  const seen = new Set();
+  const entrants = t.entrants.map((e) => {
+    if (!ID_RE.test(e?.id ?? '') || !Array.isArray(e.players) || e.players.length !== size) throw bad('Participante de torneo inválido.');
+    const players = e.players.map((p) => {
+      if (!ID_RE.test(p?.playerId ?? '')) throw bad('Jugador de torneo inválido.');
+      if (seen.has(p.playerId)) throw bad('Un jugador aparece dos veces en el torneo.');
+      seen.add(p.playerId);
+      return { playerId: p.playerId, name: cleanName(p.name, 'El nombre del jugador') };
+    });
+    return { id: e.id, name: cleanName(e.name, 'El nombre del participante').slice(0, 80), players };
+  });
+  const entrantIds = new Set(entrants.map((e) => e.id));
+  if (!Array.isArray(t.rounds) || t.rounds.length < 1 || t.rounds.length > 7) throw bad('Cuadro de torneo inválido.');
+  const rounds = t.rounds.map((round, r) => {
+    const expected = 2 ** (t.rounds.length - 1 - r);
+    if (!Array.isArray(round) || round.length !== expected) throw bad('Cuadro de torneo inválido.');
+    return round.map((m, i) => {
+      if (!ID_RE.test(m?.id ?? '')) throw bad('Enfrentamiento inválido.');
+      const out = { id: m.id, round: r, index: i };
+      if (r === 0) {
+        const slots = Array.isArray(m.slots) ? m.slots : [];
+        if (slots.length !== 2 || !entrantIds.has(slots[0]) || (slots[1] !== null && !entrantIds.has(slots[1]))) {
+          throw bad('Cruce de primera ronda inválido.');
+        }
+        out.slots = [slots[0], slots[1]];
+      }
+      return out;
+    });
+  });
+  return { id: t.id, name, mode: t.mode, target: t.target, status: t.status, createdAt: t.createdAt, updatedAt: t.updatedAt, revision: t.revision, entrants, rounds };
+}
+
+/** Id del enfrentamiento al que avanza el ganador de matchId, o null si es la final. */
+export function nextMatchId(rounds, matchId) {
+  for (let r = 0; r < rounds.length; r++) {
+    const i = rounds[r].findIndex((m) => m.id === matchId);
+    if (i >= 0) return rounds[r + 1]?.[Math.floor(i / 2)]?.id ?? null;
+  }
+  return null;
 }
 
 export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [], visionAnalyzer = createDominoAnalyzer() }) {
@@ -200,6 +267,10 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
       revision: row.revision,
       adminLocked: row.admin_revision > 0,
       adminRevision: row.admin_revision,
+      practice: !!row.practice,
+      starterParticipantId: row.starter_participant_id ?? null,
+      tournamentId: row.tournament_id ?? null,
+      matchId: row.match_id ?? null,
     };
   }
 
@@ -240,13 +311,16 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
   async function writeGame(t, game, { adminRevision, sourceUserId }) {
     await t.run(
       `INSERT INTO domino.games (id, created_at, updated_at, finished_at, status, mode, target, participants_json, sides_json,
-                                 winner_side_id, rematch_of, revision, admin_revision, source_user_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                                 winner_side_id, rematch_of, revision, admin_revision, source_user_id,
+                                 practice, starter_participant_id, tournament_id, match_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
        ON CONFLICT (id) DO UPDATE SET
          updated_at = excluded.updated_at, finished_at = excluded.finished_at, status = excluded.status,
          mode = excluded.mode, target = excluded.target, participants_json = excluded.participants_json,
          sides_json = excluded.sides_json, winner_side_id = excluded.winner_side_id, rematch_of = excluded.rematch_of,
-         revision = excluded.revision, admin_revision = excluded.admin_revision`,
+         revision = excluded.revision, admin_revision = excluded.admin_revision,
+         practice = excluded.practice, starter_participant_id = excluded.starter_participant_id,
+         tournament_id = excluded.tournament_id, match_id = excluded.match_id`,
       [
         game.id,
         game.createdAt,
@@ -262,6 +336,10 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
         game.revision,
         adminRevision,
         sourceUserId ?? null,
+        game.practice ? 1 : 0,
+        game.starterParticipantId ?? null,
+        game.tournamentId ?? null,
+        game.matchId ?? null,
       ],
     );
     await t.run('DELETE FROM domino.hands WHERE game_id = $1', [game.id]);
@@ -313,7 +391,7 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
       COALESCE(SUM(hp.pts), 0)::int AS points
     FROM domino.players p
     LEFT JOIN domino.game_players gp ON gp.player_id = p.id
-    LEFT JOIN domino.games g ON g.id = gp.game_id
+    LEFT JOIN domino.games g ON g.id = gp.game_id AND g.practice = 0
     LEFT JOIN (SELECT game_id, side_id, SUM(points) AS pts FROM domino.hands GROUP BY game_id, side_id) hp
       ON hp.game_id = gp.game_id AND hp.side_id = gp.side_id`;
 
@@ -362,10 +440,46 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
   app.post('/api/sync/games', auth, async (req, res) => {
     const incoming = req.body?.games;
     if (!Array.isArray(incoming) || incoming.length > 200) throw bad('Envía entre 0 y 200 partidas.');
+    const incomingTournaments = req.body?.tournaments ?? [];
+    if (!Array.isArray(incomingTournaments) || incomingTournaments.length > 100) throw bad('Envía como máximo 100 torneos.');
     const accepted = [];
     const serverVersionIds = [];
     const deleted = [];
     const errors = [];
+    const acceptedTournaments = [];
+    for (const raw of incomingTournaments) {
+      let tour;
+      try {
+        tour = validateIncomingTournament(raw);
+      } catch (err) {
+        errors.push({ id: typeof raw?.id === 'string' ? raw.id.slice(0, 64) : null, error: err.message });
+        continue;
+      }
+      const revision = await db.tx(async (t) => {
+        const existing = await t.get('SELECT revision FROM domino.tournaments WHERE id = $1 FOR UPDATE', [tour.id]);
+        if (existing && existing.revision >= tour.revision) return existing.revision;
+        await t.run(
+          `INSERT INTO domino.tournaments (id, name, mode, target, status, data_json, created_at, updated_at, revision, source_user_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (id) DO UPDATE SET name = excluded.name, status = excluded.status, data_json = excluded.data_json,
+             updated_at = excluded.updated_at, revision = excluded.revision`,
+          [
+            tour.id,
+            tour.name,
+            tour.mode,
+            tour.target,
+            tour.status,
+            JSON.stringify({ entrants: tour.entrants, rounds: tour.rounds }),
+            tour.createdAt,
+            tour.updatedAt,
+            tour.revision,
+            req.user.id,
+          ],
+        );
+        return tour.revision;
+      });
+      acceptedTournaments.push({ id: tour.id, revision });
+    }
     for (const raw of incoming) {
       let game;
       try {
@@ -414,7 +528,7 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
       }
     }
     const serverVersions = await loadGames(db, [...new Set(serverVersionIds)]);
-    res.json({ accepted, serverVersions, deleted, errors });
+    res.json({ accepted, serverVersions, deleted, errors, acceptedTournaments });
   });
 
   // ---------- Conteo de fichas con cámara ----------
@@ -624,8 +738,28 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
     return db.tx(async (t) => {
       await t.get('SELECT id FROM domino.games WHERE id = $1 FOR UPDATE', [id]);
       const game = await requireGame(t, id);
+      await assertTournamentResultEditable(t, game);
       return fn(t, game);
     });
+  }
+
+  /**
+   * Un resultado de torneo no se puede cambiar si el enfrentamiento siguiente del cuadro ya tiene
+   * una partida iniciada (misma regla que en la app: mobile/src/domain/tournament.ts).
+   */
+  async function assertTournamentResultEditable(t, game) {
+    if (!game.tournamentId || !game.matchId) return;
+    const row = await t.get('SELECT data_json FROM domino.tournaments WHERE id = $1', [game.tournamentId]);
+    if (!row) return;
+    const nextId = nextMatchId(JSON.parse(row.data_json).rounds, game.matchId);
+    if (!nextId) return;
+    const started = await t.get(
+      "SELECT 1 AS x FROM domino.games WHERE tournament_id = $1 AND match_id = $2 AND status <> 'cancelada'",
+      [game.tournamentId, nextId],
+    );
+    if (started) {
+      throw new HttpError(409, 'Este resultado ya no se puede cambiar: el siguiente enfrentamiento del torneo ya empezó.');
+    }
   }
 
   admin.patch('/games/:id/hands/:handId', async (req, res) => {

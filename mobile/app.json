@@ -46,7 +46,8 @@
           "microphonePermission": "Permite usar el micrófono para anotar puntos por voz.",
           "speechRecognitionPermission": "Permite reconocer tu voz para anotar puntos. En algunos dispositivos el audio se envía a Apple o Google para transcribirlo."
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "scheme": "dominopuntos",
     "backgroundColor": "#050A24",

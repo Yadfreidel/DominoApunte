@@ -5,8 +5,11 @@ export type Mode = 'individual' | 'parejas';
 export type GameStatus = 'pendiente' | 'terminada' | 'cancelada';
 
 export interface Participant {
+  /** Identificador dentro de la partida. */
   id: string;
   name: string;
+  /** Identificador estable de la persona (registro de jugadores); el mismo en todas sus partidas. */
+  playerId?: string;
 }
 
 /** Un lado es quien suma puntos: un jugador (individual) o un equipo (parejas). */
@@ -14,6 +17,8 @@ export interface Side {
   id: string;
   name: string;
   participantIds: string[];
+  /** En partidas de torneo: participante del cuadro (jugador o pareja) al que representa este lado. */
+  entrantId?: string;
 }
 
 export interface Hand {
@@ -43,21 +48,35 @@ export interface Game {
   adminLocked?: boolean;
   /** Revisión de la última corrección administrativa incorporada en este dispositivo. */
   adminRevision?: number;
+  /** Partida de práctica: se guarda pero no cuenta para estadísticas ni historial entre rivales. */
+  practice?: boolean;
+  /** Participante que sale (sorteado o elegido); null si no se definió. */
+  starterParticipantId?: string | null;
+  /** Partida de un torneo: torneo y enfrentamiento del cuadro. */
+  tournamentId?: string | null;
+  matchId?: string | null;
 }
 
 /**
  * Configuración de una partida nueva.
  * - Individual: `names` tiene un nombre por jugador (se usan los primeros `playerCount`).
- * - Parejas: `names` es [pareja 1, compañero 1, pareja 2, compañero 2]. Solo es obligatorio
- *   un nombre por pareja; el compañero es opcional.
+ * - Parejas: `names` es [pareja 1 jugador A, pareja 1 jugador B, pareja 2 jugador A, pareja 2 jugador B];
+ *   cada pareja necesita dos jugadores distintos.
  */
 export interface GameSetup {
   playerCount: number;
   names: string[];
   mode: Mode;
   target: number;
-  /** Nombres opcionales de los equipos; si faltan, se forman con los nombres de la pareja. */
+  /** Nombres editables de los equipos; si faltan, se forman con los nombres de la pareja. */
   teamNames?: [string, string];
+  /** Identificadores de jugador alineados con `names` (registro de jugadores). */
+  playerIds?: (string | undefined)[];
+  practice?: boolean;
+  /** Índice en `names` del jugador que sale, si se sorteó o eligió. */
+  starterIndex?: number | null;
+  /** Partida de torneo: torneo, enfrentamiento y participante del cuadro de cada lado. */
+  tournament?: { tournamentId: string; matchId: string; entrantIds: string[] };
 }
 
 export const MIN_PLAYERS = 2;
@@ -99,7 +118,7 @@ export function parseTarget(text: string): ParseResult {
   return r;
 }
 
-/** Nombres de cada pareja: [[jugador, compañero?], [jugador, compañero?]]. */
+/** Nombres de cada pareja: [[jugador A, jugador B], [jugador A, jugador B]] (sin vacíos). */
 export function couples(names: string[]): [string[], string[]] {
   const pair = (a = '', b = '') => [normalizeName(a), normalizeName(b)].filter(Boolean);
   return [pair(names[0], names[1]), pair(names[2], names[3])];
@@ -120,8 +139,8 @@ export function validateSetup(setup: GameSetup): string | null {
   let clean: string[];
   if (mode === 'parejas') {
     const pairs = couples(names);
-    const missing = pairs.findIndex((p) => p.length === 0);
-    if (missing >= 0) return `Escribe al menos un jugador de la pareja ${missing + 1}.`;
+    const incomplete = pairs.findIndex((p) => p.length < 2);
+    if (incomplete >= 0) return `La pareja ${incomplete + 1} necesita dos jugadores.`;
     clean = pairs.flat();
   } else {
     clean = names.slice(0, playerCount).map(normalizeName);
@@ -132,7 +151,9 @@ export function validateSetup(setup: GameSetup): string | null {
   if (clean.some((n) => n.length > MAX_NAME_LENGTH)) {
     return `Los nombres no pueden superar ${MAX_NAME_LENGTH} caracteres.`;
   }
-  if (new Set(clean.map(nameKey)).size !== clean.length) return 'Hay nombres repetidos.';
+  if (new Set(clean.map(nameKey)).size !== clean.length) return 'Un jugador no puede estar dos veces en la misma partida.';
+  const ids = (setup.playerIds ?? []).slice(0, mode === 'parejas' ? 4 : playerCount).filter(Boolean);
+  if (new Set(ids).size !== ids.length) return 'Un jugador no puede estar dos veces en la misma partida.';
   if (mode === 'parejas' && setup.teamNames) {
     const teams = setup.teamNames.map(normalizeName);
     if (teams.some((t) => t.length > MAX_NAME_LENGTH)) return 'El nombre del equipo es demasiado largo.';
@@ -146,24 +167,43 @@ export function createGame(setup: GameSetup, now: string, makeId: () => string =
   if (error) throw new GameError(error);
   let participants: Participant[];
   let sides: Side[];
+  const playerIdAt = (i: number) => setup.playerIds?.[i] || undefined;
   if (setup.mode === 'parejas') {
-    const pairs = couples(setup.names);
     const teams = setup.teamNames?.map(normalizeName) ?? ['', ''];
     participants = [];
-    sides = pairs.map((members, i) => {
-      const ids = members.map((name) => {
-        const p = { id: makeId(), name };
+    sides = [0, 1].map((team) => {
+      const members = [team * 2, team * 2 + 1].map((i) => {
+        const p: Participant = { id: makeId(), name: normalizeName(setup.names[i]) };
+        const pid = playerIdAt(i);
+        if (pid) p.playerId = pid;
         participants.push(p);
-        return p.id;
+        return p;
       });
-      return { id: makeId(), name: teams[i] || coupleName(members), participantIds: ids };
+      return {
+        id: makeId(),
+        name: teams[team] || coupleName(members.map((m) => m.name)),
+        participantIds: members.map((m) => m.id),
+      };
     });
   } else {
-    participants = setup.names
-      .slice(0, setup.playerCount)
-      .map((name) => ({ id: makeId(), name: normalizeName(name) }));
+    participants = setup.names.slice(0, setup.playerCount).map((name, i) => {
+      const p: Participant = { id: makeId(), name: normalizeName(name) };
+      const pid = playerIdAt(i);
+      if (pid) p.playerId = pid;
+      return p;
+    });
     sides = participants.map((p) => ({ id: makeId(), name: p.name, participantIds: [p.id] }));
   }
+  if (setup.tournament) {
+    const entrantIds = setup.tournament.entrantIds;
+    sides.forEach((side, i) => {
+      side.entrantId = entrantIds[i];
+    });
+  }
+  const starter =
+    setup.starterIndex != null && setup.starterIndex >= 0 && setup.starterIndex < participants.length
+      ? participants[setup.starterIndex].id
+      : null;
   return {
     id: makeId(),
     createdAt: now,
@@ -178,7 +218,37 @@ export function createGame(setup: GameSetup, now: string, makeId: () => string =
     winnerSideId: null,
     rematchOf: null,
     revision: 0,
+    practice: !!setup.practice,
+    starterParticipantId: starter,
+    tournamentId: setup.tournament?.tournamentId ?? null,
+    matchId: setup.tournament?.matchId ?? null,
   };
+}
+
+/** La partida cuenta para estadísticas e historial entre rivales: terminada, con ganador y no de práctica. */
+export function isCountable(game: Game): boolean {
+  return game.status === 'terminada' && !!game.winnerSideId && !game.practice;
+}
+
+/**
+ * Duración real de la partida en milisegundos (desde que se creó hasta que terminó), o null si
+ * faltan datos o no son coherentes. Nunca se estima.
+ */
+export function gameDurationMs(game: Pick<Game, 'createdAt' | 'finishedAt' | 'status'>): number | null {
+  if (game.status !== 'terminada' || !game.finishedAt) return null;
+  const start = Date.parse(game.createdAt);
+  const end = Date.parse(game.finishedAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return null;
+  return end - start;
+}
+
+export function formatDuration(ms: number): string {
+  const minutes = Math.round(ms / 60000);
+  if (minutes < 1) return 'menos de 1 min';
+  if (minutes < 60) return `${minutes} min`;
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
 }
 
 export function totals(game: Pick<Game, 'sides' | 'hands'>): Record<string, number> {
@@ -294,7 +364,11 @@ export function createRematch(game: Game, now: string, makeId: () => string = ne
     status: 'pendiente',
     mode: game.mode,
     target: game.target,
-    participants: game.participants.map((p) => ({ id: participantMap.get(p.id)!, name: p.name })),
+    participants: game.participants.map((p) => ({
+      id: participantMap.get(p.id)!,
+      name: p.name,
+      ...(p.playerId ? { playerId: p.playerId } : {}),
+    })),
     sides: game.sides.map((s) => ({
       id: makeId(),
       name: s.name,
@@ -304,6 +378,10 @@ export function createRematch(game: Game, now: string, makeId: () => string = ne
     winnerSideId: null,
     rematchOf: game.id,
     revision: 0,
+    practice: !!game.practice,
+    starterParticipantId: null,
+    tournamentId: null,
+    matchId: null,
   };
 }
 
@@ -345,45 +423,4 @@ export function filterGames(games: Game[], filter: HistoryFilter): Game[] {
       return true;
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-}
-
-export interface PlayerStats {
-  key: string;
-  name: string;
-  played: number;
-  wins: number;
-  losses: number;
-  pending: number;
-  cancelled: number;
-  points: number;
-  winRate: number;
-}
-
-export function computeStats(games: Game[]): PlayerStats[] {
-  const map = new Map<string, PlayerStats>();
-  for (const g of games) {
-    const t = totals(g);
-    for (const p of g.participants) {
-      const key = nameKey(p.name);
-      let s = map.get(key);
-      if (!s) {
-        s = { key, name: p.name, played: 0, wins: 0, losses: 0, pending: 0, cancelled: 0, points: 0, winRate: 0 };
-        map.set(key, s);
-      }
-      const side = participantSide(g, p.id);
-      s.played += 1;
-      if (side) s.points += t[side.id] ?? 0;
-      if (g.status === 'terminada') {
-        if (side && g.winnerSideId === side.id) s.wins += 1;
-        else s.losses += 1;
-      } else if (g.status === 'pendiente') s.pending += 1;
-      else s.cancelled += 1;
-    }
-  }
-  const list = [...map.values()];
-  for (const s of list) {
-    const decided = s.wins + s.losses;
-    s.winRate = decided ? Math.round((s.wins / decided) * 1000) / 10 : 0;
-  }
-  return list.sort((a, b) => b.wins - a.wins || b.winRate - a.winRate || a.name.localeCompare(b.name, 'es'));
 }

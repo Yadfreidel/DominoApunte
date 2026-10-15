@@ -33,7 +33,9 @@ export function AppHeader({ subtitle, title = 'DOMINÓ' }: { subtitle?: string; 
       hint: currentGame ? undefined : 'No hay una partida abierta',
     },
     { label: 'Historial', href: '/historial', icon: 'time-outline' },
+    { label: 'Torneos', href: '/torneos', icon: 'trophy-outline' },
     { label: 'Estadísticas', href: '/estadisticas', icon: 'stats-chart-outline' },
+    { label: 'Rivales', href: '/rivales', icon: 'git-compare-outline' },
     { label: 'Configuración', href: '/configuracion', icon: 'settings-outline' },
   ];
   if (isAdmin) items.push({ label: 'Administración', href: '/admin', icon: 'shield-checkmark-outline' });

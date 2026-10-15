@@ -24,7 +24,7 @@ let n = 0;
 const ids = () => `i${++n}`;
 
 const individual = createGame({ playerCount: 3, names: ['Juan', 'Juana', 'María José'], mode: 'individual', target: 200 }, T, ids);
-const couples = createGame({ playerCount: 4, names: ['Ana', 'Luis', 'Marta', ''], mode: 'parejas', target: 200 }, T, ids);
+const couples = createGame({ playerCount: 4, names: ['Ana', 'Luis', 'Marta', 'Pedro'], mode: 'parejas', target: 200 }, T, ids);
 const sideOf = (g: typeof individual, name: string) => g.sides.find((s) => s.name === name)!.id;
 
 describe('números en español', () => {

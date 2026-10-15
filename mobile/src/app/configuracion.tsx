@@ -158,6 +158,14 @@ export default function SettingsScreen() {
           <ToggleRow label="Individual" value={settings.modes.individual} disabled={locked} onChange={(v) => toggleMode('individual', v)} />
           <ToggleRow label="Por parejas (4 jugadores)" value={settings.modes.parejas} disabled={locked} onChange={(v) => toggleMode('parejas', v)} />
         </View>
+        <View style={{ gap: space.sm }}>
+          <Label>Accesibilidad</Label>
+          <ToggleRow
+            label="Reducir movimiento (sorteos sin animación)"
+            value={settings.reduceMotion}
+            onChange={(v) => store.updateSettings({ reduceMotion: v })}
+          />
+        </View>
       </Card>
 
       <Card style={s.section}>

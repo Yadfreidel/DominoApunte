@@ -2,7 +2,10 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { AppState } from 'react-native';
 import * as G from '@/domain/game.ts';
 import type { Game, GameSetup } from '@/domain/game.ts';
-import { mergeKnownPlayers, Repository, type AppData, type Settings } from '@/domain/repository.ts';
+import { resolvePlayers, type PlayerRecord } from '@/domain/players.ts';
+import { DEFAULT_SETTINGS, Repository, type AppData, type SetupDraft, type Settings } from '@/domain/repository.ts';
+import * as T from '@/domain/tournament.ts';
+import type { Tournament, TournamentInput } from '@/domain/tournament.ts';
 import { ApiError, request, type ServerGame, type ServerSettings, type User } from '@/services/api';
 import { asyncStorageAdapter, tokenStore } from '@/services/storage';
 
@@ -25,6 +28,9 @@ interface StoreValue {
   currentGame: Game | null;
   settings: Settings;
   knownPlayers: string[];
+  /** Registro de jugadores con identificador estable. */
+  players: PlayerRecord[];
+  tournaments: Tournament[];
   /** Foto del jugador (data URI) o undefined si no tiene. */
   photoOf(name: string): string | undefined;
   setPhoto(name: string, dataUri: string | null): Promise<void>;
@@ -40,6 +46,14 @@ interface StoreValue {
   cancelGame(gameId: string): Promise<void>;
   rematch(gameId: string): Promise<Game>;
   resumeGame(gameId: string): Promise<void>;
+  /** Motivo por el que un resultado de torneo ya no se puede cambiar, o null. */
+  lockReasonFor(game: Game): string | null;
+  createTournament(input: TournamentInput): Promise<Tournament>;
+  /** Abre la partida de un enfrentamiento; si ya existe (doble toque, reintento) devuelve esa misma. */
+  startTournamentMatch(tournamentId: string, matchId: string, starterIndex: number | null): Promise<Game>;
+  cancelTournament(tournamentId: string): Promise<void>;
+  loadSetupDraft(): Promise<SetupDraft | null>;
+  saveSetupDraft(draft: SetupDraft | null): Promise<void>;
   updateSettings(patch: Partial<Settings>): Promise<void>;
   syncNow(): Promise<void>;
   login(username: string, password: string): Promise<User>;
@@ -52,6 +66,8 @@ const StoreContext = createContext<StoreValue | null>(null);
 
 const envApiUrl = process.env.EXPO_PUBLIC_API_URL ?? '';
 const now = () => new Date().toISOString();
+
+const knownNames = (players: PlayerRecord[]) => players.map((p) => p.name).sort((a, b) => a.localeCompare(b, 'es'));
 
 export function AppStoreProvider({ children }: { children: ReactNode }) {
   const repo = useMemo(() => new Repository(asyncStorageAdapter), []);
@@ -73,13 +89,15 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   /** Ejecuta las operaciones de una en una para que nunca se pisen entre sí. */
-  const serial = useCallback(<T,>(op: () => Promise<T>): Promise<T> => {
+  const serial = useCallback(<R,>(op: () => Promise<R>): Promise<R> => {
     const run = opQueue.current.then(op, op);
     opQueue.current = run.catch(() => undefined);
     return run;
   }, []);
 
-  const pendingCount = (d: AppData) => d.games.filter((g) => d.syncedRevisions[g.id] !== g.revision).length;
+  const pendingCount = (d: AppData) =>
+    d.games.filter((g) => d.syncedRevisions[g.id] !== g.revision).length +
+    d.tournaments.filter((t) => d.syncedTournamentRevisions[t.id] !== t.revision).length;
 
   const clearSession = useCallback(async () => {
     tokenRef.current = null;
@@ -89,14 +107,14 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const authedRequest = useCallback(
-    async <T,>(
+    async <R,>(
       path: string,
       options: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {},
-    ): Promise<T> => {
+    ): Promise<R> => {
       const apiUrl = dataRef.current?.settings.apiUrl ?? '';
       if (!tokenRef.current) throw new ApiError(401, 'Debes iniciar sesión.');
       try {
-        return await request<T>(apiUrl, path, { ...options, token: tokenRef.current });
+        return await request<R>(apiUrl, path, { ...options, token: tokenRef.current });
       } catch (err) {
         if (err instanceof ApiError && err.status === 401) await clearSession();
         throw err;
@@ -136,19 +154,23 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
       const snapshot = dataRef.current!;
       const pending = snapshot.games.filter((g) => snapshot.syncedRevisions[g.id] !== g.revision);
+      const pendingTournaments = snapshot.tournaments.filter((t) => snapshot.syncedTournamentRevisions[t.id] !== t.revision);
       // Partidas ya sincronizadas: el servidor avisa si un administrador las corrigió o eliminó.
       const known = snapshot.games
         .filter((g) => snapshot.syncedRevisions[g.id] === g.revision)
         .map((g) => ({ id: g.id, revision: g.revision, adminRevision: g.adminRevision ?? 0 }));
-      // Siempre al menos una petición, aunque no haya partidas pendientes.
+      // Siempre al menos una petición, aunque no haya partidas pendientes. Los torneos van primero,
+      // para que el servidor conozca el cuadro antes de recibir sus partidas.
       for (let i = 0; i === 0 || i < pending.length; i += SYNC_BATCH) {
         const batch = pending.slice(i, i + SYNC_BATCH);
+        const tBatch = i === 0 ? pendingTournaments : [];
         const result = await authedRequest<{
           accepted: { id: string }[];
           serverVersions: ServerGame[];
           deleted: string[];
           errors: { id: string | null; error: string }[];
-        }>('/sync/games', { method: 'POST', body: { games: batch, known: i === 0 ? known : [] } });
+          acceptedTournaments?: { id: string }[];
+        }>('/sync/games', { method: 'POST', body: { games: batch, known: i === 0 ? known : [], tournaments: tBatch } });
 
         await serial(async () => {
           const cur = dataRef.current!;
@@ -178,11 +200,18 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
               await repo.setCurrent(null);
             }
           }
+          const tSynced = { ...cur.syncedTournamentRevisions };
+          const tSent = new Map(tBatch.map((t) => [t.id, t.revision]));
+          for (const a of result.acceptedTournaments ?? []) {
+            const local = cur.tournaments.find((t) => t.id === a.id);
+            if (local && local.revision === tSent.get(a.id)) tSynced[a.id] = local.revision;
+          }
           await repo.saveSyncedRevisions(synced);
-          commit({ ...cur, games, syncedRevisions: synced, currentGameId });
+          await repo.saveSyncedTournamentRevisions(tSynced);
+          commit({ ...cur, games, syncedRevisions: synced, syncedTournamentRevisions: tSynced, currentGameId });
         });
         if (result.errors.length) {
-          throw new ApiError(400, `El servidor rechazó ${result.errors.length} partida(s): ${result.errors[0].error}`);
+          throw new ApiError(400, `El servidor rechazó ${result.errors.length} registro(s): ${result.errors[0].error}`);
         }
       }
       setSync({ syncing: false, pending: pendingCount(dataRef.current!), lastSyncAt: now(), lastError: null });
@@ -205,7 +234,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     syncTimer.current = setTimeout(() => void syncNow(), SYNC_DEBOUNCE_MS);
   }, [syncNow]);
 
-  // Carga inicial: recupera partidas, partida en curso y sesión.
+  // Carga inicial: recupera partidas, torneos, partida en curso y sesión.
   useEffect(() => {
     let alive = true;
     (async () => {
@@ -247,13 +276,25 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     };
   }, [syncNow]);
 
-  /** Aplica un cambio a una partida, lo guarda en el dispositivo y solo entonces actualiza la pantalla. */
+  const lockReasonIn = (d: AppData, game: Game) => {
+    if (!game.tournamentId) return null;
+    const t = d.tournaments.find((x) => x.id === game.tournamentId);
+    return t ? T.lockReason(t, d.games, game) : null;
+  };
+
+  /**
+   * Única vía para modificar una partida: aplica el cambio, lo guarda y solo entonces actualiza la
+   * pantalla. El torneo, el historial y las estadísticas se derivan de las partidas, así que quedan
+   * actualizados con esta misma escritura.
+   */
   const mutateGame = useCallback(
     (gameId: string, change: (game: Game, at: string) => Game) =>
       serial(async () => {
         const cur = dataRef.current!;
         const game = cur.games.find((g) => g.id === gameId);
         if (!game) throw new G.GameError('La partida ya no existe.');
+        const locked = lockReasonIn(cur, game);
+        if (locked) throw new G.GameError(locked);
         const next = change(game, now());
         if (next === game) return;
         await repo.saveGame(next);
@@ -263,20 +304,41 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     [commit, repo, scheduleSync, serial],
   );
 
+  /** Crea la partida, registrando antes en el registro a las personas nuevas. */
   const insertGame = useCallback(
-    (game: Game) =>
+    (build: (registry: PlayerRecord[]) => { game: Game; registry: PlayerRecord[] }) =>
       serial(async () => {
+        const cur = dataRef.current!;
+        const { game, registry } = build(cur.players);
+        if (registry !== cur.players) await repo.saveRegistry(registry);
         await repo.saveGame(game);
         await repo.setCurrent(game.id);
-        const cur = dataRef.current!;
-        const knownPlayers = mergeKnownPlayers(cur.knownPlayers, game.participants.map((p) => p.name));
-        await repo.saveKnownPlayers(knownPlayers);
-        commit({ ...cur, games: [...cur.games, game], currentGameId: game.id, knownPlayers });
+        commit({
+          ...dataRef.current!,
+          games: [...dataRef.current!.games, game],
+          currentGameId: game.id,
+          players: registry,
+          knownPlayers: knownNames(registry),
+        });
         scheduleSync();
         return game;
       }),
     [commit, repo, scheduleSync, serial],
   );
+
+  const buildFromSetup = (setup: GameSetup) => (registry: PlayerRecord[]) => {
+    const count = setup.mode === 'parejas' ? 4 : setup.playerCount;
+    const problem = G.validateSetup(setup);
+    if (problem) throw new G.GameError(problem);
+    let ids = setup.playerIds?.slice(0, count);
+    let reg = registry;
+    if (!ids || ids.length < count || ids.some((x) => !x)) {
+      const r = resolvePlayers(registry, setup.names.slice(0, count), now());
+      ids = r.ids;
+      reg = r.registry;
+    }
+    return { game: G.createGame({ ...setup, playerIds: ids }, now()), registry: reg };
+  };
 
   const value = useMemo<StoreValue>(() => {
     const d = data;
@@ -287,8 +349,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       corrupted: d?.corrupted ?? [],
       games: d?.games ?? [],
       currentGame,
-      settings: d?.settings ?? { targets: [100, 150, 200], defaultTarget: 200, modes: { individual: true, parejas: true }, apiUrl: '' },
+      settings: d?.settings ?? DEFAULT_SETTINGS,
       knownPlayers: d?.knownPlayers ?? [],
+      players: d?.players ?? [],
+      tournaments: d?.tournaments ?? [],
       photoOf: (name) => d?.photos[G.nameKey(name)],
       setPhoto: (name, dataUri) =>
         serial(async () => {
@@ -299,16 +363,22 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           const photos = { ...cur.photos };
           if (dataUri) photos[key] = dataUri;
           else delete photos[key];
-          // Un jugador con foto queda también en la lista de jugadores recientes.
-          const knownPlayers = dataUri ? mergeKnownPlayers(cur.knownPlayers, [name]) : cur.knownPlayers;
-          if (knownPlayers !== cur.knownPlayers) await repo.saveKnownPlayers(knownPlayers);
-          commit({ ...cur, photos, knownPlayers });
+          // Un jugador con foto queda también en el registro de jugadores.
+          let players = cur.players;
+          if (dataUri) {
+            const r = resolvePlayers(cur.players, [name], now());
+            if (r.registry.length !== cur.players.length) {
+              players = r.registry;
+              await repo.saveRegistry(players);
+            }
+          }
+          commit({ ...cur, photos, players, knownPlayers: knownNames(players) });
         }),
       user,
       isAdmin: user?.role === 'admin',
       serverManagedSettings,
       sync,
-      startGame: (setup) => insertGame(G.createGame(setup, now())),
+      startGame: (setup) => insertGame(buildFromSetup(setup)),
       addHand: (gameId, sideId, points, handId) =>
         mutateGame(gameId, (g, at) => G.addHand(g, sideId, points, handId, at)),
       editHand: (gameId, handId, changes) => mutateGame(gameId, (g, at) => G.editHand(g, handId, changes, at)),
@@ -318,13 +388,73 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       rematch: (gameId) => {
         const game = dataRef.current?.games.find((g) => g.id === gameId);
         if (!game) return Promise.reject(new G.GameError('La partida ya no existe.'));
-        return insertGame(G.createRematch(game, now()));
+        return insertGame((registry) => ({ game: G.createRematch(game, now()), registry }));
       },
       resumeGame: (gameId) =>
         serial(async () => {
           await repo.setCurrent(gameId);
           commit({ ...dataRef.current!, currentGameId: gameId });
         }),
+      lockReasonFor: (game) => (d ? lockReasonIn(d, game) : null),
+      createTournament: (input) =>
+        serial(async () => {
+          // Las personas nuevas entran al registro para tener un id estable en todas sus partidas.
+          const cur = dataRef.current!;
+          const names = input.entrants.flatMap((e) => e.players.map((p) => p.name));
+          const resolved = resolvePlayers(cur.players, names, now());
+          let k = 0;
+          const withIds: TournamentInput = {
+            ...input,
+            entrants: input.entrants.map((e) => ({
+              ...e,
+              players: e.players.map((p) => ({ name: p.name, playerId: resolved.ids[k++] })),
+            })),
+          };
+          const t = T.createTournament(withIds, now());
+          if (resolved.registry.length !== cur.players.length) await repo.saveRegistry(resolved.registry);
+          await repo.saveTournament(t);
+          commit({
+            ...dataRef.current!,
+            tournaments: [...dataRef.current!.tournaments, t],
+            players: resolved.registry,
+            knownPlayers: knownNames(resolved.registry),
+          });
+          scheduleSync();
+          return t;
+        }),
+      startTournamentMatch: (tournamentId, matchId, starterIndex) =>
+        serial(async () => {
+          const cur = dataRef.current!;
+          const t = cur.tournaments.find((x) => x.id === tournamentId);
+          if (!t) throw new T.TournamentError('El torneo ya no existe.');
+          const existing = T.matchGame(t, matchId, cur.games);
+          if (existing) {
+            await repo.setCurrent(existing.id);
+            commit({ ...dataRef.current!, currentGameId: existing.id });
+            return existing;
+          }
+          const match = T.findMatch(T.resolveTournament(t, cur.games), matchId);
+          if (!match) throw new T.TournamentError('El enfrentamiento no existe.');
+          const game = G.createGame(T.matchGameSetup(t, match, starterIndex), now());
+          await repo.saveGame(game);
+          await repo.setCurrent(game.id);
+          commit({ ...dataRef.current!, games: [...dataRef.current!.games, game], currentGameId: game.id });
+          scheduleSync();
+          return game;
+        }),
+      cancelTournament: (tournamentId) =>
+        serial(async () => {
+          const cur = dataRef.current!;
+          const t = cur.tournaments.find((x) => x.id === tournamentId);
+          if (!t) return;
+          const next = T.cancelTournament(t, now());
+          if (next === t) return;
+          await repo.saveTournament(next);
+          commit({ ...cur, tournaments: cur.tournaments.map((x) => (x.id === t.id ? next : x)) });
+          scheduleSync();
+        }),
+      loadSetupDraft: () => repo.loadDraft(),
+      saveSetupDraft: (draft) => repo.saveDraft(draft),
       updateSettings: (patch) =>
         serial(async () => {
           const settings = { ...dataRef.current!.settings, ...patch };
@@ -347,7 +477,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       logout: clearSession,
       api: authedRequest,
     };
-  }, [authedRequest, clearSession, commit, data, insertGame, loadError, mutateGame, repo, serial, serverManagedSettings, sync, syncNow, user]);
+  }, [authedRequest, clearSession, commit, data, insertGame, loadError, mutateGame, repo, serial, serverManagedSettings, sync, syncNow, user, scheduleSync]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

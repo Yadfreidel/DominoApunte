@@ -2,6 +2,8 @@
 // escriba solo esa partida. Las escrituras se encolan para conservar el orden.
 import type { Game, Mode } from './game.ts';
 import { nameKey, normalizeName } from './game.ts';
+import { migrateGames, resolvePlayers, type PlayerRecord } from './players.ts';
+import type { Tournament } from './tournament.ts';
 
 export interface KeyValueStorage {
   getItem(key: string): Promise<string | null>;
@@ -15,6 +17,18 @@ export interface Settings {
   modes: Record<Mode, boolean>;
   /** URL base de la API, p. ej. https://domino.midominio.com */
   apiUrl: string;
+  /** Muestra los sorteos sin animación. */
+  reduceMotion: boolean;
+}
+
+/** Borrador de la pantalla de nueva partida: conserva sorteos confirmados al recargar. */
+export interface SetupDraft {
+  mode: 'individual' | 'parejas';
+  countChoice: number;
+  names: string[];
+  teamNames: [string, string];
+  starterIndex: number | null;
+  practice: boolean;
 }
 
 export interface AppData {
@@ -22,8 +36,13 @@ export interface AppData {
   currentGameId: string | null;
   settings: Settings;
   knownPlayers: string[];
+  /** Registro de jugadores con identificador estable. */
+  players: PlayerRecord[];
+  tournaments: Tournament[];
   /** Revisión de cada partida ya confirmada por el servidor. */
   syncedRevisions: Record<string, number>;
+  /** Revisión de cada torneo ya confirmada por el servidor. */
+  syncedTournamentRevisions: Record<string, number>;
   /** Fotos de jugadores (data URI JPEG pequeño), por clave de nombre (ver nameKey). */
   photos: Record<string, string>;
   /** Claves que no se pudieron leer (datos dañados). */
@@ -35,6 +54,7 @@ export const DEFAULT_SETTINGS: Settings = {
   defaultTarget: 200,
   modes: { individual: true, parejas: true },
   apiUrl: '',
+  reduceMotion: false,
 };
 
 const PREFIX = 'domino:v1:';
@@ -47,7 +67,17 @@ export const KEYS = {
   synced: `${PREFIX}synced`,
   photoIndex: `${PREFIX}photoKeys`,
   photo: (key: string) => `${PREFIX}photo:${encodeURIComponent(key)}`,
+  registry: `${PREFIX}registry`,
+  tournamentIndex: `${PREFIX}tournamentIds`,
+  tournament: (id: string) => `${PREFIX}tournament:${id}`,
+  syncedTournaments: `${PREFIX}syncedTournaments`,
+  setupDraft: `${PREFIX}setupDraft`,
 };
+
+function isTournament(value: unknown): value is Tournament {
+  const t = value as Tournament;
+  return !!t && typeof t.id === 'string' && Array.isArray(t.entrants) && Array.isArray(t.rounds);
+}
 
 function isGame(value: unknown): value is Game {
   const g = value as Game;
@@ -74,6 +104,7 @@ export class Repository {
   private queue: Promise<unknown> = Promise.resolve();
   private gameIds: string[] = [];
   private photoKeys: string[] = [];
+  private tournamentIds: string[] = [];
   private storage: KeyValueStorage;
 
   constructor(storage: KeyValueStorage) {
@@ -123,15 +154,71 @@ export class Repository {
       if (uri?.startsWith('data:image/')) photos[key] = uri;
     }
     this.photoKeys = Object.keys(photos);
+
+    const tournaments: Tournament[] = [];
+    for (const id of (await this.readJson<string[]>(KEYS.tournamentIndex, corrupted)) ?? []) {
+      const t = await this.readJson<Tournament>(KEYS.tournament(id), corrupted);
+      if (isTournament(t)) tournaments.push(t);
+      else if (t != null) corrupted.push(KEYS.tournament(id));
+    }
+    this.tournamentIds = tournaments.map((t) => t.id);
+
+    // Registro de jugadores: incorpora los nombres de la lista antigua de "jugadores recientes" y
+    // vincula por nombre las partidas guardadas antes de que existiera el registro.
+    const now = new Date().toISOString();
+    let registry = (await this.readJson<PlayerRecord[]>(KEYS.registry, corrupted)) ?? [];
+    const legacyNames = (await this.readJson<string[]>(KEYS.players, corrupted)) ?? [];
+    const before = registry.length;
+    registry = resolvePlayers(registry, legacyNames.filter((n) => normalizeName(n)), now).registry;
+    const migrated = migrateGames(games, registry, now);
+    registry = migrated.registry;
+    for (const g of migrated.changed) await this.storage.setItem(KEYS.game(g.id), JSON.stringify(g));
+    if (registry.length !== before || migrated.changed.length) {
+      await this.storage.setItem(KEYS.registry, JSON.stringify(registry));
+    }
+
     return {
-      games,
+      games: migrated.games,
       currentGameId,
       photos,
       settings,
-      knownPlayers: (await this.readJson<string[]>(KEYS.players, corrupted)) ?? [],
+      knownPlayers: registry.map((r) => r.name).sort((a, b) => a.localeCompare(b, 'es')),
+      players: registry,
+      tournaments,
       syncedRevisions: (await this.readJson<Record<string, number>>(KEYS.synced, corrupted)) ?? {},
+      syncedTournamentRevisions: (await this.readJson<Record<string, number>>(KEYS.syncedTournaments, corrupted)) ?? {},
       corrupted,
     };
+  }
+
+  saveRegistry(registry: PlayerRecord[]): Promise<void> {
+    return this.enqueue(() => this.storage.setItem(KEYS.registry, JSON.stringify(registry)));
+  }
+
+  saveTournament(t: Tournament): Promise<void> {
+    return this.enqueue(async () => {
+      await this.storage.setItem(KEYS.tournament(t.id), JSON.stringify(t));
+      if (!this.tournamentIds.includes(t.id)) {
+        const next = [...this.tournamentIds, t.id];
+        await this.storage.setItem(KEYS.tournamentIndex, JSON.stringify(next));
+        this.tournamentIds = next;
+      }
+    });
+  }
+
+  saveSyncedTournamentRevisions(revisions: Record<string, number>): Promise<void> {
+    return this.enqueue(() => this.storage.setItem(KEYS.syncedTournaments, JSON.stringify(revisions)));
+  }
+
+  async loadDraft(): Promise<SetupDraft | null> {
+    const corrupted: string[] = [];
+    return this.readJson<SetupDraft>(KEYS.setupDraft, corrupted);
+  }
+
+  saveDraft(draft: SetupDraft | null): Promise<void> {
+    return this.enqueue(() =>
+      draft ? this.storage.setItem(KEYS.setupDraft, JSON.stringify(draft)) : this.storage.removeItem(KEYS.setupDraft),
+    );
   }
 
   /** Guarda la partida y espera a que quede escrita. */
