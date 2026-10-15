@@ -11,16 +11,21 @@ export interface PreparedPhoto {
   height: number;
 }
 
-export const cameraAvailable = Platform.OS !== 'web';
+/** En el teléfono siempre; en la web, solo en dispositivos táctiles (el navegador del celular abre la cámara). */
+export const cameraAvailable =
+  Platform.OS !== 'web' || (typeof navigator !== 'undefined' && (navigator.maxTouchPoints ?? 0) > 0);
 
 /** Pide una foto (cámara o galería) y la prepara para el análisis. Devuelve null si se cancela. */
 export async function pickTilePhoto(source: 'camera' | 'library'): Promise<PreparedPhoto | null> {
   const options: ImagePicker.ImagePickerOptions = { mediaTypes: 'images', allowsEditing: false, quality: 1 };
   let result: ImagePicker.ImagePickerResult;
   if (source === 'camera') {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) throw new Error('Permite el acceso a la cámara en los ajustes del teléfono.');
-    result = await ImagePicker.launchCameraAsync(options);
+    // En la web el permiso lo pide el propio navegador al abrir la cámara.
+    if (Platform.OS !== 'web') {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) throw new Error('Permite el acceso a la cámara en los ajustes del teléfono.');
+    }
+    result = await ImagePicker.launchCameraAsync({ ...options, cameraType: ImagePicker.CameraType.back });
   } else {
     if (Platform.OS !== 'web') {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();

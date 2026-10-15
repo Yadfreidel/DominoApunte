@@ -6,7 +6,9 @@ export type PhotoSource = 'camera' | 'library';
 
 const SIZE = 256;
 
-export const cameraAvailable = Platform.OS !== 'web';
+/** En el teléfono siempre; en la web, solo en dispositivos táctiles (el navegador del celular abre la cámara). */
+export const cameraAvailable =
+  Platform.OS !== 'web' || (typeof navigator !== 'undefined' && (navigator.maxTouchPoints ?? 0) > 0);
 
 /**
  * Pide una foto a la cámara o a la galería y la devuelve recortada en cuadrado,
@@ -22,9 +24,12 @@ export async function pickPhoto(source: PhotoSource): Promise<string | null> {
   };
   let result: ImagePicker.ImagePickerResult;
   if (source === 'camera') {
-    const perm = await ImagePicker.requestCameraPermissionsAsync();
-    if (!perm.granted) throw new Error('Permite el acceso a la cámara en los ajustes del teléfono.');
-    result = await ImagePicker.launchCameraAsync(options);
+    // En la web el permiso lo pide el propio navegador al abrir la cámara.
+    if (Platform.OS !== 'web') {
+      const perm = await ImagePicker.requestCameraPermissionsAsync();
+      if (!perm.granted) throw new Error('Permite el acceso a la cámara en los ajustes del teléfono.');
+    }
+    result = await ImagePicker.launchCameraAsync({ ...options, cameraType: ImagePicker.CameraType.front });
   } else {
     if (Platform.OS !== 'web') {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
