@@ -23,7 +23,7 @@ import { Button, Card, ErrorText, Field, Label } from '../ui';
 import { as, errorMessage, QueryState, SectionHeader } from './common';
 import { useAdminQuery } from './useAdminQuery';
 
-const LOGO_MAX_KB = 300;
+const LOGO_MAX_KB = 1024;
 const dataUriKb = (uri: string) => Math.ceil(((uri.length - uri.indexOf(',') - 1) * 3) / 4 / 1024);
 
 // ---------------------------------------------------------------- Identidad visual
@@ -64,7 +64,6 @@ function BrandingForm({ saved, onSaved }: { saved: Branding; onSaved: () => void
     try {
       const uri = await pickLogo();
       if (uri) {
-        if (dataUriKb(uri) > LOGO_MAX_KB) throw new Error(`El logo pesa ${dataUriKb(uri)} KB; el máximo es ${LOGO_MAX_KB} KB. Usa una imagen más simple.`);
         set({ logo: uri });
       }
     } catch (err) {
@@ -119,7 +118,7 @@ function BrandingForm({ saved, onSaved }: { saved: Branding; onSaved: () => void
           multiline
           style={{ minHeight: 70, paddingTop: 12, textAlignVertical: 'top' }}
         />
-        <Label>Logo (PNG, JPEG o WebP; máximo {LOGO_MAX_KB} KB, entre 32 y 1024 px)</Label>
+        <Label>Logo (cualquier imagen: se ajusta y comprime automáticamente)</Label>
         <View style={[as.wrap, { alignItems: 'center' }]}>
           {draft.logo ? <Image source={{ uri: draft.logo }} style={st.logoLarge} accessibilityLabel="Logo elegido" /> : <Text style={as.muted}>Sin logo</Text>}
           <Button label={draft.logo ? 'Cambiar logo' : 'Elegir logo'} icon="image-outline" size="sm" variant="outline" onPress={chooseLogo} loading={busy} />

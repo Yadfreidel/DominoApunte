@@ -399,8 +399,13 @@ describe('pruebas, auditoría, exportación y apariencia', () => {
   test('identidad visual: valida formato y tamaño del logo y se puede restaurar', async () => {
     const fake = await api('/admin/branding', { method: 'PUT', token: tokens.owner, body: { appName: 'Club', logo: `data:image/png;base64,${Buffer.from('no soy png').toString('base64')}` } });
     assert.equal(fake.status, 400);
+    // Cualquier tamaño de imagen se acepta (la app la comprime antes de subirla), incluso muy pequeña.
     const tiny = await api('/admin/branding', { method: 'PUT', token: tokens.owner, body: { appName: 'Club', logo: png(8, 8) } });
-    assert.match(tiny.data.error, /pequeña/);
+    assert.equal(tiny.status, 200);
+    // Solo se rechaza un archivo desproporcionado (más de 1 MB), que la app nunca envía.
+    const huge = `data:image/png;base64,${Buffer.concat([Buffer.from(png(64, 64).split(',')[1], 'base64'), randomBytes(1100 * 1024)]).toString('base64')}`;
+    const big = await api('/admin/branding', { method: 'PUT', token: tokens.owner, body: { appName: 'Club', logo: huge } });
+    assert.match(big.data.error, /máximo es 1024 KB/);
     const ok = await api('/admin/branding', { method: 'PUT', token: tokens.owner, body: { appName: 'Club Dominó', tagline: 'Liga del barrio', logo: png(64, 64) } });
     assert.equal(ok.status, 200);
     assert.equal((await api('/public/config')).data.branding.appName, 'Club Dominó');

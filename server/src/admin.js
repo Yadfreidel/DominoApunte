@@ -23,7 +23,7 @@ const auditUser = (u) => ({ ...publicUser(u), photo: u.photo ? 'foto' : null });
 const PAGE_MAX = 100;
 const CONFIRM_WORD = 'ELIMINAR';
 const PHOTO_MAX_BYTES = 200 * 1024;
-const LOGO_MAX_BYTES = 300 * 1024;
+const LOGO_MAX_BYTES = 1024 * 1024;
 
 /** Clave para detectar perfiles duplicados: sin tildes, mayúsculas ni signos. */
 export const duplicateKey = (name) =>
@@ -1051,7 +1051,7 @@ export function registerAdminRoutes(admin, ctx) {
       appName: text(body.appName, 'El nombre de la app', 30, true),
       tagline: text(body.tagline, 'El subtítulo', 60),
       homeText: text(body.homeText, 'El texto de bienvenida', 200),
-      logo: body.logo ? validateImage(body.logo, { maxBytes: LOGO_MAX_BYTES, minSide: 32, maxSide: 1024, label: 'El logo' }).dataUri : null,
+      logo: body.logo ? validateImage(body.logo, { maxBytes: LOGO_MAX_BYTES, minSide: 1, maxSide: 4096, label: 'El logo' }).dataUri : null,
     };
     await db.tx(async (t) => {
       const before = await getBranding(t);

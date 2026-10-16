@@ -58,12 +58,15 @@ export async function pickPhoto(source: PhotoSource): Promise<string | null> {
   return `data:image/jpeg;base64,${saved.base64}`;
 }
 
-const LOGO_MAX_SIDE = 512;
+/** Tamaño objetivo del logo ya comprimido (el servidor admite hasta 1 MB). */
+const LOGO_TARGET_BYTES = 250 * 1024;
+
+const dataUriBytes = (uri: string) => Math.ceil(((uri.length - uri.indexOf(',') - 1) * 3) / 4);
 
 /**
- * Elige un logo de la galería: PNG (conserva la transparencia), con su proporción original y el lado
- * mayor reducido a 512 px. Devuelve null si el usuario cancela. El servidor vuelve a validar formato,
- * tamaño y dimensiones.
+ * Elige cualquier imagen de la galería como logo y la adapta sola: la reduce y la comprime hasta que
+ * pese menos de 250 KB. Primero intenta PNG (conserva la transparencia), después WebP y, como último
+ * recurso, JPEG. Devuelve null si el usuario cancela.
  */
 export async function pickLogo(): Promise<string | null> {
   if (Platform.OS !== 'web') {
@@ -73,14 +76,38 @@ export async function pickLogo(): Promise<string | null> {
   const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: false, quality: 1 });
   const asset = result.canceled ? null : result.assets?.[0];
   if (!asset) return null;
-  const context = ImageManipulator.manipulate(asset.uri);
-  const w = asset.width || LOGO_MAX_SIDE;
-  const h = asset.height || LOGO_MAX_SIDE;
-  if (Math.max(w, h) > LOGO_MAX_SIDE) {
-    context.resize(w >= h ? { width: LOGO_MAX_SIDE } : { height: LOGO_MAX_SIDE });
+  const w = asset.width || 512;
+  const h = asset.height || 512;
+
+  const render = async (side: number, format: SaveFormat, compress = 1) => {
+    const context = ImageManipulator.manipulate(asset.uri);
+    const scale = Math.min(1, side / Math.max(w, h));
+    if (scale < 1) context.resize(w >= h ? { width: Math.round(w * scale) } : { height: Math.round(h * scale) });
+    const image = await context.renderAsync();
+    const saved = await image.saveAsync({ format, compress, base64: true });
+    if (!saved.base64) throw new Error('No se pudo procesar la imagen.');
+    const mime = format === SaveFormat.PNG ? 'png' : format === SaveFormat.WEBP ? 'webp' : 'jpeg';
+    return `data:image/${mime};base64,${saved.base64}`;
+  };
+
+  const attempts: [number, SaveFormat, number][] = [
+    [512, SaveFormat.PNG, 1],
+    [384, SaveFormat.PNG, 1],
+    [512, SaveFormat.WEBP, 0.85],
+    [512, SaveFormat.JPEG, 0.85],
+    [384, SaveFormat.JPEG, 0.75],
+    [256, SaveFormat.JPEG, 0.7],
+  ];
+  let last = '';
+  for (const [side, format, compress] of attempts) {
+    try {
+      last = await render(side, format, compress);
+    } catch {
+      continue; // formato no disponible en este navegador o teléfono: se prueba el siguiente
+    }
+    // Algunos navegadores devuelven PNG al pedir WebP: se acepta igual si ya cumple el tamaño.
+    if (dataUriBytes(last) <= LOGO_TARGET_BYTES) return last;
   }
-  const image = await context.renderAsync();
-  const saved = await image.saveAsync({ format: SaveFormat.PNG, base64: true });
-  if (!saved.base64) throw new Error('No se pudo procesar la imagen.');
-  return `data:image/png;base64,${saved.base64}`;
+  if (!last) throw new Error('No se pudo procesar la imagen.');
+  return last;
 }
