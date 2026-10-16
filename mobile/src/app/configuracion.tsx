@@ -18,6 +18,12 @@ export default function SettingsScreen() {
   const [newTarget, setNewTarget] = useState('');
   const [targetError, setTargetError] = useState<string | null>(null);
   const [apiUrl, setApiUrl] = useState(settings.apiUrl);
+  // Si la pantalla se abrió antes de leer los datos guardados, muestra la dirección en cuanto llega.
+  const [savedApiUrl, setSavedApiUrl] = useState(settings.apiUrl);
+  if (savedApiUrl !== settings.apiUrl) {
+    setSavedApiUrl(settings.apiUrl);
+    setApiUrl(settings.apiUrl);
+  }
   const [testing, setTesting] = useState(false);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
