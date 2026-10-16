@@ -13,6 +13,8 @@ export interface User {
   active: boolean;
   /** Perfil de jugador vinculado a la cuenta (no todos los jugadores tienen cuenta). */
   playerId: number | null;
+  /** Foto de perfil de la cuenta (data URI) o null. */
+  photo?: string | null;
 }
 
 export interface ServerSettings {

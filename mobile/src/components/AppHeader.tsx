@@ -1,12 +1,15 @@
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, type Href } from 'expo-router';
 import { useState } from 'react';
-import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ROLE_LABEL } from '@/services/api';
+import { cameraAvailable, pickPhoto, type PhotoSource } from '@/services/photos';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, space } from '@/theme';
-import { IconButton, type IconName } from './ui';
+import { Avatar } from './Avatar';
+import { useDialogs } from './Dialogs';
+import { Button, IconButton, type IconName } from './ui';
 import { useGoTo } from '@/navigation';
 
 interface MenuItem {
@@ -19,7 +22,10 @@ interface MenuItem {
 
 export function AppHeader({ subtitle, title }: { subtitle?: string; title?: string }) {
   const [open, setOpen] = useState(false);
-  const { currentGame, user, branding } = useStore();
+  const { currentGame, user, branding, isAdmin, setMyPhoto } = useStore();
+  const { toast } = useDialogs();
+  const [photoOptions, setPhotoOptions] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
   const heading = title ?? branding.appName.toLocaleUpperCase('es');
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
@@ -44,7 +50,28 @@ export function AppHeader({ subtitle, title }: { subtitle?: string; title?: stri
 
   const go = (href: Href) => {
     setOpen(false);
+    setPhotoOptions(false);
     goTo(href);
+  };
+
+  const changePhoto = async (source: PhotoSource | null) => {
+    setPhotoOptions(false);
+    setPhotoBusy(true);
+    try {
+      if (source === null) {
+        await setMyPhoto(null);
+        toast('Foto quitada', 'info');
+      } else {
+        const uri = await pickPhoto(source);
+        if (!uri) return;
+        await setMyPhoto(uri);
+        toast('Foto de perfil actualizada');
+      }
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'No se pudo guardar la foto.', 'error');
+    } finally {
+      setPhotoBusy(false);
+    }
   };
 
   return (
@@ -97,11 +124,41 @@ export function AppHeader({ subtitle, title }: { subtitle?: string; title?: stri
               );
             })}
             {user ? (
-              <View style={s.userRow}>
-                <Ionicons name="person-circle-outline" size={18} color={colors.textDim} />
-                <Text style={s.userText}>
-                  {user.username} · {ROLE_LABEL[user.role]}
-                </Text>
+              <View style={s.profile}>
+                <View style={s.userRow}>
+                  <Pressable
+                    onPress={() => setPhotoOptions((v) => !v)}
+                    disabled={photoBusy}
+                    accessibilityRole="button"
+                    accessibilityLabel={user.photo ? 'Cambiar mi foto de perfil' : 'Poner mi foto de perfil'}
+                    style={({ pressed }) => [pressed && { opacity: 0.75 }]}
+                  >
+                    <Avatar name={user.username} colorIndex={1} size={48} photo={user.photo ?? undefined} />
+                    <View style={s.cameraBadge}>
+                      {photoBusy ? <ActivityIndicator size="small" color={colors.onLime} /> : <Ionicons name="camera" size={12} color={colors.onLime} />}
+                    </View>
+                  </Pressable>
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.userName} numberOfLines={1}>
+                      {user.username}
+                    </Text>
+                    <Text style={s.userText}>{ROLE_LABEL[user.role]}</Text>
+                  </View>
+                </View>
+                {photoOptions ? (
+                  <View style={s.photoOptions}>
+                    {cameraAvailable ? (
+                      <Button label="Tomar foto" icon="camera-outline" size="sm" variant="outline" onPress={() => changePhoto('camera')} style={s.photoButton} />
+                    ) : null}
+                    <Button label="Galería" icon="images-outline" size="sm" variant="outline" onPress={() => changePhoto('library')} style={s.photoButton} />
+                    {user.photo ? (
+                      <Button label="Quitar" icon="trash-outline" size="sm" variant="ghost" onPress={() => changePhoto(null)} style={s.photoButton} />
+                    ) : null}
+                  </View>
+                ) : null}
+                {isAdmin ? (
+                  <Button label="Panel de administración" icon="shield-checkmark-outline" variant="purple" size="sm" onPress={() => go('/admin')} />
+                ) : null}
               </View>
             ) : null}
           </View>
@@ -161,14 +218,29 @@ const s = StyleSheet.create({
   itemActive: { backgroundColor: colors.limeSoft },
   itemLabel: { color: colors.text, fontSize: 18, fontWeight: '600' },
   itemHint: { color: colors.textDim, fontSize: 12 },
-  userRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
+  profile: {
+    gap: space.sm,
     borderTopWidth: 1,
     borderTopColor: colors.borderSoft,
     marginTop: space.sm,
     padding: space.md,
   },
+  userName: { color: colors.text, fontSize: 16, fontWeight: '700' },
+  cameraBadge: {
+    position: 'absolute',
+    right: -2,
+    bottom: -2,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.lime,
+    borderWidth: 2,
+    borderColor: colors.surfaceSolid,
+  },
+  photoOptions: { flexDirection: 'row', flexWrap: 'wrap', gap: space.sm },
+  photoButton: { flexGrow: 1 },
+  userRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   userText: { color: colors.textDim, fontSize: 13 },
 });

@@ -80,6 +80,8 @@ interface StoreValue {
   syncNow(): Promise<void>;
   login(username: string, password: string): Promise<User>;
   logout(): Promise<void>;
+  /** Pone, cambia o (con null) quita la foto de perfil de la cuenta con sesión iniciada. */
+  setMyPhoto(dataUri: string | null): Promise<void>;
   /** Petición autenticada al servidor. Si la sesión dejó de ser válida, la cierra. */
   api<T>(path: string, options?: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal; text?: boolean }): Promise<T>;
 }
@@ -548,6 +550,10 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         return res.user;
       },
       logout: clearSession,
+      setMyPhoto: async (dataUri) => {
+        const res = await authedRequest<{ user: User }>('/auth/me/photo', { method: 'PUT', body: { photo: dataUri } });
+        setUser(res.user);
+      },
       api: authedRequest,
     };
   }, [authedRequest, clearSession, commit, data, insertGame, loadError, mutateGame, repo, serial, sync, syncNow, user, scheduleSync, publicConfig, themePending, refreshPublicConfig]);

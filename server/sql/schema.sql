@@ -141,6 +141,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS users_email_key ON domino.users (lower(email))
 ALTER TABLE domino.users DROP CONSTRAINT IF EXISTS users_role_check;
 ALTER TABLE domino.users ADD CONSTRAINT users_role_check CHECK (role IN ('propietario', 'admin', 'anotador'));
 
+-- Foto de perfil de la cuenta (la elige cada usuario desde su perfil en la app).
+ALTER TABLE domino.users ADD COLUMN IF NOT EXISTS photo TEXT;
+
 -- Recuperación de contraseña: solo se guarda el hash del enlace, de un solo uso y con vencimiento.
 CREATE TABLE IF NOT EXISTS domino.password_resets (
   id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,

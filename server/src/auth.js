@@ -48,6 +48,7 @@ export function publicUser(user) {
     role: user.role,
     active: !!user.active,
     playerId: user.player_id ?? null,
+    photo: user.photo ?? null,
   };
 }
 

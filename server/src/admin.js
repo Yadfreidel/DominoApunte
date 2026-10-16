@@ -18,6 +18,8 @@ import { drawBracket, newId, resolveBracket, startedEntrantIds } from './tournam
 import { describeImage, toCsv, validateAppearance, validateImage } from './validation.js';
 
 const conflict = (message) => new HttpError(409, message);
+/** Cuenta para la auditoría: sin la imagen de la foto (solo si tiene una). */
+const auditUser = (u) => ({ ...publicUser(u), photo: u.photo ? 'foto' : null });
 const PAGE_MAX = 100;
 const CONFIRM_WORD = 'ELIMINAR';
 const PHOTO_MAX_BYTES = 200 * 1024;
@@ -1215,7 +1217,7 @@ export function registerAdminRoutes(admin, ctx) {
         'INSERT INTO domino.users (username, email, password_hash, role, active, created_at, player_id) VALUES ($1, $2, $3, $4, 1, $5, $6) RETURNING *',
         [username, email, hashPassword(req.body.password), role, now(), playerId],
       );
-      await logCorrection(t, req, { entity: 'usuario', entityId: created.id, action: 'crear', reason: 'Alta de usuario', after: publicUser(created) });
+      await logCorrection(t, req, { entity: 'usuario', entityId: created.id, action: 'crear', reason: 'Alta de usuario', after: auditUser(created) });
       return created;
     });
     res.status(201).json({ user: publicUser(user) });
@@ -1266,8 +1268,8 @@ export function registerAdminRoutes(admin, ctx) {
         entityId: user.id,
         action: 'editar',
         reason,
-        before: publicUser(user),
-        after: { ...publicUser(row), passwordChanged: req.body.password !== undefined },
+        before: auditUser(user),
+        after: { ...auditUser(row), passwordChanged: req.body.password !== undefined },
       });
       return row;
     });

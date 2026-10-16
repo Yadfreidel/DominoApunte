@@ -19,7 +19,7 @@ import { isNonNegativeInt, MAX_HAND_POINTS, MAX_TARGET, recompute } from './doma
 import { bad, cleanName, EMAIL_RE, HttpError, ID_RE, MODES, notFound, STATUSES } from './http.js';
 import { createMailer } from './mail.js';
 import { nextMatchId } from './tournament.js';
-import { ValidationError } from './validation.js';
+import { validateImage, ValidationError } from './validation.js';
 import { createDominoAnalyzer, VisionError } from './vision.js';
 
 export { nextMatchId };
@@ -535,6 +535,14 @@ export function createApp({
 
   // ---------- Usuario autenticado (anotador o administrador) ----------
   app.get('/api/auth/me', auth, (req, res) => res.json({ user: publicUser(req.user) }));
+
+  /** Foto de perfil de la propia cuenta (cualquier usuario con sesión). null la quita. */
+  app.put('/api/auth/me/photo', auth, async (req, res) => {
+    const photo = req.body?.photo;
+    const img = photo === null ? null : validateImage(photo, { maxBytes: 200 * 1024, minSide: 32, maxSide: 1024, label: 'La foto' });
+    const row = await db.get('UPDATE domino.users SET photo = $1 WHERE id = $2 RETURNING *', [img?.dataUri ?? null, req.user.id]);
+    res.json({ user: publicUser(row) });
+  });
 
   /** Cierra todas las sesiones de la cuenta (en todos los dispositivos). */
   app.post('/api/auth/logout-all', auth, async (req, res) => {

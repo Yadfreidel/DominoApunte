@@ -428,3 +428,18 @@ describe('pruebas, auditoría, exportación y apariencia', () => {
     assert.equal((await api('/public/config')).data.appearance.preset, 'original');
   });
 });
+
+describe('foto de perfil de la cuenta', () => {
+  test('cada usuario pone, cambia y quita su propia foto; se valida el formato', async () => {
+    const token = (await api('/auth/login', { method: 'POST', body: { username: 'mesa2', password: PASS.mesa2 } })).data.token;
+    assert.equal((await api('/auth/me/photo', { method: 'PUT', body: { photo: png(64, 64) } })).status, 401, 'exige sesión');
+    const bad = await api('/auth/me/photo', { method: 'PUT', token, body: { photo: 'data:image/png;base64,AAAA' } });
+    assert.equal(bad.status, 400);
+    const set = await api('/auth/me/photo', { method: 'PUT', token, body: { photo: png(64, 64) } });
+    assert.equal(set.status, 200);
+    assert.match(set.data.user.photo, /^data:image\/png;base64,/);
+    assert.equal((await api('/auth/me', { token })).data.user.photo, set.data.user.photo, 'se conserva al volver a entrar');
+    const removed = await api('/auth/me/photo', { method: 'PUT', token, body: { photo: null } });
+    assert.equal(removed.data.user.photo, null);
+  });
+});
