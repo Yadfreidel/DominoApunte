@@ -3,7 +3,9 @@ import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, StyleSheet, Switch, Text, TextInput, View, type TextStyle } from 'react-native';
 import { AppHeader } from '@/components/AppHeader';
-import { Avatar, PlayerPhotoButton, VersusBanner, type VersusSide } from '@/components/Avatar';
+import { Avatar, PlayerPhotoButton, type VersusSide } from '@/components/Avatar';
+import { Disclosure } from '@/components/Disclosure';
+import { VersusShowdown } from '@/components/Versus';
 import { useDialogs } from '@/components/Dialogs';
 import { StarterDraw } from '@/components/StarterDraw';
 import { Button, Card, ErrorText, Field, Label, Loading, Pill, Screen, Select, type IconName } from '@/components/ui';
@@ -105,6 +107,15 @@ export default function NewGame() {
 
   const effectiveNames = names.slice(0, count);
   const starter = starterIndex != null && starterIndex < count ? starterIndex : null;
+  // Resumen de «Más opciones» para verlo sin abrirlo.
+  const moreSummary =
+    [
+      starter != null && effectiveNames[starter]?.trim() ? `Sale ${effectiveNames[starter].trim()}` : null,
+      pass.ok && pass.value > 0 ? `Pase ${pass.value}` : null,
+      practice ? 'Práctica' : null,
+    ]
+      .filter(Boolean)
+      .join(' · ') || undefined;
 
   const teamLabel = (pair: 0 | 1) => {
     const members = [names[pair * 2], names[pair * 2 + 1]].map(normalizeName).filter(Boolean);
@@ -306,8 +317,10 @@ export default function NewGame() {
                 </View>
               );
             })}
-            <Button label="Sortear parejas" icon="shuffle" variant="outline" size="sm" onPress={drawTeams} />
-            <Text style={s.cardHint}>Mezcla a los cuatro jugadores en dos parejas al azar. Puedes editarlas antes de empezar.</Text>
+            <Disclosure icon="shuffle" title="Sortear parejas" accent={colors.purple}>
+              <Text style={s.cardHint}>Mezcla a los cuatro jugadores en dos parejas al azar. Puedes editarlas antes de empezar.</Text>
+              <Button label="Sortear parejas" icon="shuffle" variant="purple" size="sm" onPress={drawTeams} />
+            </Disclosure>
           </>
         )}
 
@@ -333,20 +346,10 @@ export default function NewGame() {
       </Card>
 
       {/* Cara a cara */}
-      <Card style={s.versusCard}>
-        <Text style={s.versusTitle}>Así se enfrentan</Text>
-        <VersusBanner sides={versus} />
-      </Card>
+      <VersusShowdown sides={versus} />
 
-      {/* Quién sale */}
-      <Card style={s.section}>
-        <Text style={s.cardTitle}>¿Quién sale?</Text>
-        <StarterDraw names={effectiveNames} value={starter} onResult={setStarterIndex} />
-      </Card>
-
-      {/* Meta */}
-      <Card style={s.section}>
-        <Text style={s.cardTitle}>Meta de la partida</Text>
+      {/* Meta: desplegable */}
+      <Disclosure icon="flag-outline" title="Meta por partida" value={target.ok ? `${target.value} puntos` : 'Elige una meta'}>
         <View style={s.wrap}>
           {defaults.targets.map((t) => (
             <Pill
@@ -382,6 +385,14 @@ export default function NewGame() {
             error={customTarget && !target.ok ? target.error : null}
           />
         ) : null}
+      </Disclosure>
+
+      {/* Opciones poco frecuentes: quién sale, penalización por pase y práctica */}
+      <Disclosure icon="options-outline" title="Más opciones" value={moreSummary} accent={colors.purple}>
+        <View style={{ gap: space.sm }}>
+          <Text style={s.toggleLabel}>¿Quién sale?</Text>
+          <StarterDraw names={effectiveNames} value={starter} onResult={setStarterIndex} />
+        </View>
         <Field
           label="Puntos por pase (opcional)"
           value={passText}
@@ -412,7 +423,7 @@ export default function NewGame() {
             accessibilityLabel="Partida de práctica"
           />
         </View>
-      </Card>
+      </Disclosure>
 
       {error ? <ErrorText>{error}</ErrorText> : null}
       <Button
