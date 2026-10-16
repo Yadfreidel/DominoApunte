@@ -4,3 +4,6 @@ data/
 *.db
 *.db-*
 *.crt
+
+.vercel
+.env*

@@ -2,11 +2,14 @@
 // - Con DATABASE_URL: PostgreSQL real (Supabase u otro) mediante node-postgres.
 // - Sin DATABASE_URL: PGlite (PostgreSQL embebido) en una carpeta local, para desarrollo y pruebas.
 // Ambos usan exactamente el mismo SQL (sql/schema.sql), que se aplica al arrancar.
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { PGlite } from '@electric-sql/pglite';
 import pg from 'pg';
 
 export const SCHEMA_SQL = readFileSync(new URL('../sql/schema.sql', import.meta.url), 'utf8');
+/** Huella del esquema: si la base ya tiene esta versión, no se vuelve a ejecutar al arrancar. */
+export const SCHEMA_VERSION = createHash('sha256').update(SCHEMA_SQL).digest('hex').slice(0, 16);
 
 /**
  * Valores predeterminados para nuevas partidas. Cada partida copia los suyos al crearse, así que
@@ -75,6 +78,34 @@ function wrapPool(pool) {
     kind: 'postgres',
     ...queryApi(pool, count),
     exec: (sql) => pool.query(sql),
+    /**
+     * Aplica el esquema solo si cambió. En servidores sin estado (Vercel) cada instancia nueva
+     * arranca de cero: el bloqueo evita que dos instancias apliquen la migración a la vez.
+     */
+    async applySchema(sql, version) {
+      try {
+        const row = (await pool.query("SELECT value_json FROM domino.settings WHERE key = 'schema_version'")).rows[0];
+        if (row && JSON.parse(row.value_json) === version) return;
+      } catch {
+        // Base nueva: todavía no existe la tabla de configuración.
+      }
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock(724501)');
+        await client.query(sql);
+        await client.query(
+          "INSERT INTO domino.settings (key, value_json) VALUES ('schema_version', $1) ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json",
+          [JSON.stringify(version)],
+        );
+        await client.query('COMMIT');
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => undefined);
+        throw err;
+      } finally {
+        client.release();
+      }
+    },
     async tx(fn) {
       const client = await pool.connect();
       try {
@@ -103,6 +134,10 @@ function wrapPool(pool) {
  */
 function sslConfig(env) {
   if (env.DATABASE_SSL === 'disable') return false;
+  if (env.DATABASE_SSL_CA?.includes('-----BEGIN CERTIFICATE-----')) {
+    // El certificado puede venir como texto (variables de entorno de Vercel) en lugar de una ruta.
+    return { ca: env.DATABASE_SSL_CA.replace(/\\n/g, '\n'), rejectUnauthorized: true };
+  }
   if (env.DATABASE_SSL_CA) {
     if (!existsSync(env.DATABASE_SSL_CA)) {
       throw new Error(
@@ -147,7 +182,8 @@ export async function openDatabase({ url, dataDir, env = process.env } = {}) {
     await pglite.waitReady;
     db = wrapPglite(pglite);
   }
-  await db.exec(SCHEMA_SQL);
+  if (db.applySchema) await db.applySchema(SCHEMA_SQL, SCHEMA_VERSION);
+  else await db.exec(SCHEMA_SQL);
   return db;
 }
 

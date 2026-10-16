@@ -1,11 +1,11 @@
 import { createApp } from './app.js';
+import { appOptionsFromEnv, checkSecret } from './config.js';
 import { openDatabase } from './db.js';
 
 const port = Number(process.env.PORT || 4000);
-const jwtSecret = process.env.JWT_SECRET;
-
-if (!jwtSecret || jwtSecret.length < 32) {
-  console.error('Falta JWT_SECRET (mínimo 32 caracteres). Copia .env.example como .env y complétalo.');
+const missing = checkSecret();
+if (missing) {
+  console.error(missing);
   process.exit(1);
 }
 
@@ -30,15 +30,7 @@ if (owners === 0) {
   console.warn('Aún no hay propietario. Asígnalo con:  npm run set-owner -- <usuario> --email <tu correo>');
 }
 
-const app = createApp({
-  db,
-  jwtSecret,
-  jwtExpiresIn: process.env.JWT_EXPIRES_IN || '12h',
-  corsOrigins: (process.env.CORS_ORIGINS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean),
-});
+const app = createApp({ db, ...appOptionsFromEnv() });
 
 app.listen(port, '0.0.0.0', () => {
   console.log(`API de Dominó escuchando en http://localhost:${port}`);

@@ -157,6 +157,27 @@ Sin esas variables, el panel avisa que la recuperación por correo no está conf
 
 Todas las tablas nuevas tienen RLS. En Supabase, después de arrancar el servidor una vez, vuelve a ejecutar [`server/sql/supabase-permisos.sql`](server/sql/supabase-permisos.sql) en el SQL Editor para retirar a las claves públicas el acceso a las tablas nuevas.
 
+## Publicación en internet (Vercel)
+
+- **App:** https://dominoapunte-mobile.vercel.app. Se publica sola con cada `git push` a `main`.
+  - Usa el servidor indicado en [`mobile/.env.production`](mobile/.env.production).
+  - Si un teléfono tenía guardada una dirección `http://` de la red local, la app la reemplaza sola por la del servidor publicado.
+- **Servidor:** https://dominoapunte-server.vercel.app, en el proyecto de Vercel `dominoapunte-server`.
+  - Entrada: [`server/api/index.js`](server/api/index.js).
+  - Se conecta a Supabase por el **Transaction pooler** (puerto 6543), con el certificado verificado.
+  - El esquema solo se aplica cuando cambia: guarda su versión en `domino.settings` y usa un bloqueo para que dos arranques no choquen.
+- **Variables:** viven solo en Vercel (Settings → Environment Variables), nunca en git:
+  - `DATABASE_URL`, `DATABASE_SSL_CA` (el certificado como texto), `DATABASE_POOL_MAX=1`
+  - `JWT_SECRET`, `JWT_EXPIRES_IN`
+  - `CORS_ORIGINS` (solo el dominio de la app)
+  - `RESEND_API_KEY`, `MAIL_FROM`, `APP_URL`
+- **Volver a publicar el servidor** después de cambiar su código:
+  ```bash
+  cd server
+  npx vercel deploy --prod
+  ```
+  `.vercelignore` impide que se suban `.env`, el certificado o datos locales.
+
 ## Requisitos
 
 - **Node.js 22 o superior** (probado con Node 24).

@@ -1,0 +1,9 @@
+# Nunca subir secretos ni datos locales a Vercel: las variables se configuran en el proyecto.
+.env
+*.crt
+data/
+test/
+node_modules/
+.env.local
+.vercel/
+vercel-env-tmp.mjs

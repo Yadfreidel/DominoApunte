@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as G from '@/domain/game.ts';
 import type { Game, GameSetup } from '@/domain/game.ts';
 import { resolvePlayers, type PlayerRecord } from '@/domain/players.ts';
@@ -299,6 +299,13 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const loaded = await repo.load({ apiUrl: envApiUrl });
+        // La versión publicada (https) no puede hablar con un servidor http de la red local: si quedó
+        // guardada una dirección así de antes, se usa la del servidor publicado.
+        const httpsPage = Platform.OS === 'web' && globalThis.location?.protocol === 'https:';
+        if (httpsPage && loaded.settings.apiUrl.startsWith('http:') && envApiUrl.startsWith('https:')) {
+          loaded.settings = { ...loaded.settings, apiUrl: envApiUrl };
+          await repo.saveSettings(loaded.settings);
+        }
         if (!alive) return;
         commit(loaded);
         setSync((s) => ({ ...s, pending: pendingCount(loaded) }));

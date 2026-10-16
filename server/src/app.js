@@ -197,6 +197,7 @@ export function createApp({
   corsOrigins = [],
   visionAnalyzer = createDominoAnalyzer(),
   mailer = createMailer(),
+  trustProxy = 'loopback',
 }) {
   if (!jwtSecret || jwtSecret.length < 32) {
     throw new Error('JWT_SECRET es obligatorio y debe tener al menos 32 caracteres.');
@@ -204,7 +205,7 @@ export function createApp({
 
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 'loopback');
+  app.set('trust proxy', trustProxy);
   app.use(cors({ origin: corsOrigins.length ? corsOrigins : '*', exposedHeaders: ['Content-Disposition'] }));
   const smallJson = express.json({ limit: '2mb' });
   // Solo la ruta de conteo de fichas acepta cuerpos grandes (la foto en base64).
