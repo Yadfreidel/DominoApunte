@@ -8,10 +8,37 @@ import pg from 'pg';
 
 export const SCHEMA_SQL = readFileSync(new URL('../sql/schema.sql', import.meta.url), 'utf8');
 
+/**
+ * Valores predeterminados para nuevas partidas. Cada partida copia los suyos al crearse, así que
+ * cambiarlos no modifica partidas existentes ni en curso; el usuario puede personalizarlos.
+ */
 export const DEFAULT_SETTINGS = Object.freeze({
   defaultTargets: [100, 150, 200],
   defaultTarget: 200,
+  defaultMode: 'individual',
   modes: { individual: true, parejas: true },
+  rules: { passPoints: 0 },
+});
+
+/** Identidad visual original de la app. */
+export const DEFAULT_BRANDING = Object.freeze({
+  appName: 'Dominó',
+  tagline: 'Marcador de partidas',
+  homeText: '',
+  logo: null,
+});
+
+/** Tema original ("Competitivo"). Debe coincidir con el preset "original" de mobile/src/domain/appearance.ts. */
+export const DEFAULT_APPEARANCE = Object.freeze({
+  preset: 'original',
+  colors: {
+    primary: '#C6F432',
+    secondary: '#A06BFF',
+    background: '#050A24',
+    card: '#0E1640',
+    text: '#FFFFFF',
+    button: '#C6F432',
+  },
 });
 
 /** Métodos comunes sobre un "ejecutor" (la base de datos o una transacción). */
@@ -124,15 +151,30 @@ export async function openDatabase({ url, dataDir, env = process.env } = {}) {
   return db;
 }
 
-export async function getSettings(db) {
-  const row = await db.get("SELECT value_json FROM domino.settings WHERE key = 'game'");
-  if (!row) return structuredClone(DEFAULT_SETTINGS);
-  return { ...structuredClone(DEFAULT_SETTINGS), ...JSON.parse(row.value_json) };
+async function readSetting(db, key, defaults) {
+  const row = await db.get('SELECT value_json FROM domino.settings WHERE key = $1', [key]);
+  return row ? { ...structuredClone(defaults), ...JSON.parse(row.value_json) } : structuredClone(defaults);
 }
 
-export async function saveSettings(db, settings) {
+async function writeSetting(db, key, value) {
   await db.run(
-    "INSERT INTO domino.settings (key, value_json) VALUES ('game', $1) ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json",
-    [JSON.stringify(settings)],
+    'INSERT INTO domino.settings (key, value_json) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value_json = excluded.value_json',
+    [key, JSON.stringify(value)],
   );
+}
+
+export async function getSettings(db) {
+  const s = await readSetting(db, 'game', DEFAULT_SETTINGS);
+  // Las modalidades ya no se restringen: el usuario elige; se conserva el campo para apps anteriores.
+  return { ...s, modes: { individual: true, parejas: true } };
+}
+export const saveSettings = (db, settings) => writeSetting(db, 'game', settings);
+export const getBranding = (db) => readSetting(db, 'branding', DEFAULT_BRANDING);
+export const saveBranding = (db, value) => writeSetting(db, 'branding', value);
+export const getAppearance = (db) => readSetting(db, 'appearance', DEFAULT_APPEARANCE);
+export const saveAppearance = (db, value) => writeSetting(db, 'appearance', value);
+
+export async function getPublicConfig(db) {
+  const [settings, branding, appearance] = await Promise.all([getSettings(db), getBranding(db), getAppearance(db)]);
+  return { settings, branding, appearance };
 }

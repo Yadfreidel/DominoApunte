@@ -1,23 +1,33 @@
 import type { Game, Mode } from '@/domain/game.ts';
 
-export type Role = 'admin' | 'anotador';
+export type Role = 'propietario' | 'admin' | 'anotador';
+
+export const isAdminRole = (role: Role | undefined | null) => role === 'propietario' || role === 'admin';
+export const ROLE_LABEL: Record<Role, string> = { propietario: 'Propietario', admin: 'Administrador', anotador: 'Anotador' };
 
 export interface User {
   id: number;
   username: string;
+  email: string | null;
   role: Role;
   active: boolean;
+  /** Perfil de jugador vinculado a la cuenta (no todos los jugadores tienen cuenta). */
+  playerId: number | null;
 }
 
 export interface ServerSettings {
   defaultTargets: number[];
   defaultTarget: number;
+  defaultMode: Mode;
   modes: Record<Mode, boolean>;
+  rules: { passPoints: number };
 }
 
 export interface ServerGame extends Game {
   totals: Record<string, number>;
   adminLocked: boolean;
+  deletedAt?: string | null;
+  ownerUserId?: number | null;
 }
 
 export interface PlayerRow {
@@ -25,6 +35,9 @@ export interface PlayerRow {
   name: string;
   active: boolean;
   createdAt: string;
+  photo: string | null;
+  deletedAt: string | null;
+  account: { id: number; username: string; active: boolean } | null;
   played: number;
   wins: number;
   losses: number;
@@ -54,8 +67,18 @@ export interface Summary {
   active: number;
   finished: number;
   cancelled: number;
+  practice: number;
+  trash: number;
   corrections: number;
+  activeTournaments: number;
   recentGames: ServerGame[];
+  recentActivity: Correction[];
+}
+
+export interface Paged {
+  total: number;
+  page: number;
+  size: number;
 }
 
 export class ApiError extends Error {
@@ -81,7 +104,8 @@ export async function request<T>(
     token,
     timeoutMs = TIMEOUT_MS,
     signal,
-  }: { method?: string; body?: unknown; token?: string | null; timeoutMs?: number; signal?: AbortSignal } = {},
+    text = false,
+  }: { method?: string; body?: unknown; token?: string | null; timeoutMs?: number; signal?: AbortSignal; text?: boolean } = {},
 ): Promise<T> {
   if (!baseUrl) throw new ApiError(0, 'Configura la dirección del servidor en Configuración.');
   if (signal?.aborted) throw new ApiError(499, 'Operación cancelada.');
@@ -114,6 +138,7 @@ export async function request<T>(
     signal?.removeEventListener('abort', onCancel);
   }
   if (res.status === 204) return undefined as T;
+  if (text && res.ok) return (await res.text()) as T;
   let data: { error?: string } | null = null;
   try {
     data = await res.json();

@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import { usePathname, type Href } from 'expo-router';
 import { useState } from 'react';
-import { Modal, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ROLE_LABEL } from '@/services/api';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, space } from '@/theme';
 import { IconButton, type IconName } from './ui';
@@ -16,9 +17,10 @@ interface MenuItem {
   disabled?: boolean;
 }
 
-export function AppHeader({ subtitle, title = 'DOMINÓ' }: { subtitle?: string; title?: string }) {
+export function AppHeader({ subtitle, title }: { subtitle?: string; title?: string }) {
   const [open, setOpen] = useState(false);
-  const { currentGame, isAdmin, user } = useStore();
+  const { currentGame, user, branding } = useStore();
+  const heading = title ?? branding.appName.toLocaleUpperCase('es');
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
   const goTo = useGoTo();
@@ -38,7 +40,7 @@ export function AppHeader({ subtitle, title = 'DOMINÓ' }: { subtitle?: string; 
     { label: 'Rivales', href: '/rivales', icon: 'git-compare-outline' },
     { label: 'Configuración', href: '/configuracion', icon: 'settings-outline' },
   ];
-  if (isAdmin) items.push({ label: 'Administración', href: '/admin', icon: 'shield-checkmark-outline' });
+  // El panel de administración no aparece en este menú: se entra directamente en /admin.
 
   const go = (href: Href) => {
     setOpen(false);
@@ -49,9 +51,12 @@ export function AppHeader({ subtitle, title = 'DOMINÓ' }: { subtitle?: string; 
     <View style={s.wrap}>
       <View style={s.row}>
         <IconButton icon="menu" label="Abrir menú" onPress={() => setOpen(true)} size={30} />
-        <Text style={s.title} accessibilityRole="header" numberOfLines={1} adjustsFontSizeToFit>
-          {title}
-        </Text>
+        <View style={s.brand}>
+          {branding.logo ? <Image source={{ uri: branding.logo }} style={s.logo} accessibilityLabel={`Logo de ${branding.appName}`} /> : null}
+          <Text style={s.title} accessibilityRole="header" numberOfLines={1} adjustsFontSizeToFit>
+            {heading}
+          </Text>
+        </View>
         <IconButton icon="settings-sharp" label="Configuración" onPress={() => goTo('/configuracion')} size={26} />
       </View>
       {subtitle ? (
@@ -65,7 +70,7 @@ export function AppHeader({ subtitle, title = 'DOMINÓ' }: { subtitle?: string; 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable style={s.backdrop} onPress={() => setOpen(false)} accessibilityLabel="Cerrar menú">
           <View style={[s.menu, { marginTop: insets.top + 56 }]} accessibilityRole="menu">
-            <Text style={s.menuTitle}>Menú</Text>
+            <Text style={s.menuTitle}>{branding.tagline ? `${branding.appName} · ${branding.tagline}` : 'Menú'}</Text>
             {items.map((item) => {
               const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(`${item.href}/`));
               return (
@@ -95,7 +100,7 @@ export function AppHeader({ subtitle, title = 'DOMINÓ' }: { subtitle?: string; 
               <View style={s.userRow}>
                 <Ionicons name="person-circle-outline" size={18} color={colors.textDim} />
                 <Text style={s.userText}>
-                  {user.username} · {user.role === 'admin' ? 'Administrador' : 'Anotador'}
+                  {user.username} · {ROLE_LABEL[user.role]}
                 </Text>
               </View>
             ) : null}
@@ -109,19 +114,21 @@ export function AppHeader({ subtitle, title = 'DOMINÓ' }: { subtitle?: string; 
 const s = StyleSheet.create({
   wrap: { paddingTop: space.sm, paddingBottom: space.md },
   row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  brand: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: space.sm, minWidth: 0 },
+  logo: { width: 40, height: 40, borderRadius: 10 },
   title: {
-    flex: 1,
+    flexShrink: 1,
     textAlign: 'center',
-    color: '#F4F6FF',
+    color: colors.title,
     fontFamily: fonts.black,
     fontSize: 46,
     letterSpacing: 2,
-    textShadowColor: 'rgba(140, 160, 255, 0.85)',
+    textShadowColor: colors.titleGlow,
     textShadowRadius: 14,
     textShadowOffset: { width: 0, height: 0 },
   },
   subtitleRow: { flexDirection: 'row', alignItems: 'center', gap: space.md, marginTop: -2, paddingHorizontal: space.xl },
-  line: { flex: 1, height: 1, backgroundColor: 'rgba(174, 182, 218, 0.35)' },
+  line: { flex: 1, height: 1, backgroundColor: colors.divider },
   subtitle: { color: colors.textMuted, fontSize: 16, fontWeight: '600' },
   backdrop: { flex: 1, backgroundColor: colors.overlay, paddingHorizontal: space.lg },
   menu: {
@@ -151,7 +158,7 @@ const s = StyleSheet.create({
     paddingHorizontal: space.md,
     borderRadius: radius.md,
   },
-  itemActive: { backgroundColor: 'rgba(198, 244, 50, 0.1)' },
+  itemActive: { backgroundColor: colors.limeSoft },
   itemLabel: { color: colors.text, fontSize: 18, fontWeight: '600' },
   itemHint: { color: colors.textDim, fontSize: 12 },
   userRow: {

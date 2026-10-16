@@ -466,7 +466,7 @@ function ReviewStep({
         {group.tiles.map((t, i) => {
           const problem = problems.find((p) => p.tileId === t.id)?.problem;
           return (
-            <View key={t.id} style={[s.tileRow, selected === t.id && { backgroundColor: 'rgba(198,244,50,0.06)' }, problem && { borderColor: colors.warning }]}>
+            <View key={t.id} style={[s.tileRow, selected === t.id && { backgroundColor: colors.limeFaint }, problem && { borderColor: colors.warning }]}>
               <View style={s.rowBetween}>
                 <Text style={s.tileName}>
                   Ficha {i + 1}

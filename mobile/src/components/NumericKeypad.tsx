@@ -19,6 +19,8 @@ interface Props {
   initialSideId: string | null;
   initialValue?: string;
   confirmLabel?: string;
+  /** Regla opcional de la partida: puntos para el rival cuando un jugador pasa (0 = sin botón). */
+  passPoints?: number;
   onSubmit: (sideId: string, points: number) => Promise<void>;
   onClose: () => void;
 }
@@ -26,7 +28,7 @@ interface Props {
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'C', '0', '⌫'] as const;
 const MAX_DIGITS = String(MAX_HAND_POINTS).length;
 
-export function NumericKeypad({ visible, title, sides, initialSideId, initialValue = '', confirmLabel = 'Confirmar', onSubmit, onClose }: Props) {
+export function NumericKeypad({ visible, title, sides, initialSideId, initialValue = '', confirmLabel = 'Confirmar', passPoints = 0, onSubmit, onClose }: Props) {
   // El componente se monta de nuevo en cada apertura (key distinta), así que el estado inicial viene de las props.
   const [value, setValue] = useState(initialValue);
   const [sideId, setSideId] = useState<string | null>(initialSideId);
@@ -126,6 +128,19 @@ export function NumericKeypad({ visible, title, sides, initialSideId, initialVal
             <Text style={s.displayUnit}>puntos</Text>
           </View>
           {error ? <ErrorText>{error}</ErrorText> : null}
+          {passPoints > 0 ? (
+            <Button
+              label={`Pase: ${passPoints} puntos`}
+              icon="hand-left-outline"
+              variant="outline"
+              size="sm"
+              onPress={() => {
+                setValue(String(passPoints));
+                setError(null);
+              }}
+              accessibilityHint="Escribe los puntos por pase de esta partida; elige a quién se anotan y confirma"
+            />
+          ) : null}
 
           <View style={s.grid}>
             {KEYS.map((k) => (
@@ -187,7 +202,7 @@ const s = StyleSheet.create({
   display: {
     borderWidth: 2,
     borderRadius: radius.lg,
-    backgroundColor: 'rgba(5, 10, 36, 0.9)',
+    backgroundColor: colors.sheet,
     paddingVertical: space.sm,
     alignItems: 'center',
   },
@@ -205,7 +220,7 @@ const s = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  keyAlt: { backgroundColor: 'rgba(20, 30, 82, 0.5)' },
-  keyPressed: { backgroundColor: '#22307A', transform: [{ scale: 0.97 }] },
+  keyAlt: { backgroundColor: colors.keyAlt },
+  keyPressed: { backgroundColor: colors.keyPressed, transform: [{ scale: 0.97 }] },
   keyText: { color: colors.text, fontFamily: fonts.display, fontSize: 32 },
 });

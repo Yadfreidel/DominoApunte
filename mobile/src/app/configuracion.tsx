@@ -6,16 +6,14 @@ import { useDialogs } from '@/components/Dialogs';
 import { formatDateTime } from '@/components/GameSummary';
 import { Button, Card, ErrorText, Field, Label, Pill, Screen, Select } from '@/components/ui';
 import { parseTarget } from '@/domain/game.ts';
-import { ApiError, normalizeApiUrl, request } from '@/services/api';
+import { ApiError, normalizeApiUrl, request, ROLE_LABEL } from '@/services/api';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, space } from '@/theme';
-import { useGoTo } from '@/navigation';
 
 export default function SettingsScreen() {
   const store = useStore();
-  const { settings, user, sync, serverManagedSettings } = store;
+  const { settings, user, sync, defaults, themePending } = store;
   const { confirm, toast } = useDialogs();
-  const goTo = useGoTo();
 
   const [newTarget, setNewTarget] = useState('');
   const [targetError, setTargetError] = useState<string | null>(null);
@@ -25,8 +23,6 @@ export default function SettingsScreen() {
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
-
-  const locked = serverManagedSettings;
 
   const addTarget = async () => {
     const parsed = parseTarget(newTarget);
@@ -44,12 +40,6 @@ export default function SettingsScreen() {
     if (!ok) return;
     const targets = settings.targets.filter((x) => x !== t);
     await store.updateSettings({ targets, defaultTarget: settings.defaultTarget === t ? targets[0] : settings.defaultTarget });
-  };
-
-  const toggleMode = async (mode: 'individual' | 'parejas', value: boolean) => {
-    const modes = { ...settings.modes, [mode]: value };
-    if (!modes.individual && !modes.parejas) return toast('Debe haber al menos una modalidad.', 'error');
-    await store.updateSettings({ modes });
   };
 
   const saveServer = async () => {
@@ -76,13 +66,13 @@ export default function SettingsScreen() {
   };
 
   const login = async () => {
-    if (!username.trim() || !password) return setLoginError('Escribe tu usuario y contraseña.');
+    if (!username.trim() || !password) return setLoginError('Escribe tu correo (o usuario) y contraseña.');
     setLoggingIn(true);
     setLoginError(null);
     try {
       const u = await store.login(username.trim(), password);
       setPassword('');
-      toast(`Sesión iniciada como ${u.role === 'admin' ? 'administrador' : 'anotador'}`);
+      toast(`Sesión iniciada (${ROLE_LABEL[u.role].toLowerCase()})`);
     } catch (err) {
       setLoginError(err instanceof ApiError || err instanceof Error ? err.message : 'No se pudo iniciar sesión.');
     } finally {
@@ -115,10 +105,20 @@ export default function SettingsScreen() {
 
       <Card style={s.section}>
         <Text style={s.title}>Partidas</Text>
-        {locked ? (
+        {settings.apiUrl ? (
           <View style={s.managed}>
-            <Ionicons name="shield-checkmark-outline" size={16} color={colors.purple} />
-            <Text style={s.managedText}>Metas y modalidades administradas por el servidor.</Text>
+            <Ionicons name="information-circle-outline" size={16} color={colors.purple} />
+            <Text style={s.managedText}>
+              Sugerencias del organizador para partidas nuevas: meta {defaults.defaultTarget}, modalidad{' '}
+              {defaults.defaultMode === 'parejas' ? 'por parejas' : 'individual'}
+              {defaults.passPoints ? `, ${defaults.passPoints} puntos por pase` : ''}. Puedes cambiarlas en cada partida.
+            </Text>
+          </View>
+        ) : null}
+        {themePending ? (
+          <View style={s.managed}>
+            <Ionicons name="color-palette-outline" size={16} color={colors.purple} />
+            <Text style={s.managedText}>Hay un tema nuevo de la app. Se aplicará al volver a abrirla.</Text>
           </View>
         ) : null}
         <Select
@@ -131,11 +131,10 @@ export default function SettingsScreen() {
           <Label>Metas disponibles</Label>
           <View style={s.wrap}>
             {settings.targets.map((t) => (
-              <Pill key={t} label={locked ? String(t) : `${t}  ✕`} active={t === settings.defaultTarget} onPress={() => (locked ? undefined : removeTarget(t))} />
+              <Pill key={t} label={`${t}  ✕`} active={t === settings.defaultTarget} onPress={() => removeTarget(t)} />
             ))}
           </View>
-          {!locked ? (
-            <View style={[s.wrap, { marginTop: space.sm, alignItems: 'flex-start' }]}>
+          <View style={[s.wrap, { marginTop: space.sm, alignItems: 'flex-start' }]}>
               <View style={{ flex: 1, minWidth: 150 }}>
                 <Field
                   value={newTarget}
@@ -150,13 +149,7 @@ export default function SettingsScreen() {
               </View>
               <Button label="Agregar" icon="add" variant="outline" onPress={addTarget} />
             </View>
-          ) : null}
           {targetError ? <ErrorText>{targetError}</ErrorText> : null}
-        </View>
-        <View style={{ gap: space.sm }}>
-          <Label>Modalidades habilitadas</Label>
-          <ToggleRow label="Individual" value={settings.modes.individual} disabled={locked} onChange={(v) => toggleMode('individual', v)} />
-          <ToggleRow label="Por parejas (4 jugadores)" value={settings.modes.parejas} disabled={locked} onChange={(v) => toggleMode('parejas', v)} />
         </View>
         <View style={{ gap: space.sm }}>
           <Label>Accesibilidad</Label>
@@ -189,10 +182,10 @@ export default function SettingsScreen() {
           user ? (
             <View style={{ gap: space.md }}>
               <View style={s.userBox}>
-                <Ionicons name={user.role === 'admin' ? 'shield-checkmark' : 'person-circle'} size={30} color={user.role === 'admin' ? colors.purple : colors.lime} />
+                <Ionicons name={user.role === 'anotador' ? 'person-circle' : 'shield-checkmark'} size={30} color={user.role === 'anotador' ? colors.lime : colors.purple} />
                 <View style={{ flex: 1 }}>
                   <Text style={s.userName}>{user.username}</Text>
-                  <Text style={s.meta}>{user.role === 'admin' ? 'Administrador' : 'Anotador'}</Text>
+                  <Text style={s.meta}>{ROLE_LABEL[user.role]}</Text>
                 </View>
                 <Button label="Salir" size="sm" variant="outline" onPress={logout} />
               </View>
@@ -208,11 +201,10 @@ export default function SettingsScreen() {
                 {sync.lastError ? <ErrorText>{sync.lastError}</ErrorText> : null}
                 <Button label="Sincronizar ahora" icon="sync" variant="outline" size="sm" onPress={() => store.syncNow()} loading={sync.syncing} />
               </View>
-              {user.role === 'admin' ? <Button label="Ir a Administración" icon="shield-checkmark-outline" variant="purple" onPress={() => goTo('/admin')} /> : null}
             </View>
           ) : (
             <View style={{ gap: space.md }}>
-              <Field label="Usuario" placeholder="Tu usuario" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} textContentType="username" />
+              <Field label="Correo o usuario" placeholder="tu@correo.com" value={username} onChangeText={setUsername} autoCapitalize="none" autoCorrect={false} textContentType="username" />
               <Field
                 label="Contraseña"
                 placeholder="Tu contraseña"
@@ -243,7 +235,7 @@ function ToggleRow({ label, value, onChange, disabled }: { label: string; value:
         onValueChange={onChange}
         disabled={disabled}
         trackColor={{ false: colors.border, true: colors.limeDeep }}
-        thumbColor={value ? colors.lime : '#C9CEE6'}
+        thumbColor={value ? colors.lime : colors.thumbOff}
         accessibilityLabel={label}
       />
     </View>

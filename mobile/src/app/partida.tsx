@@ -388,6 +388,7 @@ export default function Scoreboard() {
         initialSideId={keypad?.sideId ?? null}
         initialValue={keypad?.initialValue ?? ''}
         confirmLabel={keypad?.kind === 'edit' ? 'Guardar corrección' : 'Confirmar'}
+        passPoints={keypad?.kind === 'edit' ? 0 : game.rules?.passPoints ?? 0}
         onSubmit={submitKeypad}
         onClose={() => setKeypad(null)}
       />
@@ -400,11 +401,11 @@ const s = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: space.sm,
-    backgroundColor: 'rgba(160, 107, 255, 0.12)',
+    backgroundColor: colors.purpleSoft,
     borderRadius: radius.md,
     padding: space.md,
   },
-  tournamentBar: { backgroundColor: 'rgba(255, 193, 69, 0.1)' },
+  tournamentBar: { backgroundColor: colors.warningSoft },
   link: { color: colors.warning, fontWeight: '700', fontSize: 14 },
   noticeText: { color: colors.text, fontSize: 14, flex: 1 },
   cards: { flexDirection: 'row', gap: space.md },
@@ -420,7 +421,7 @@ const s = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: colors.bg,
     borderWidth: 1.5,
-    borderColor: '#3A4A9A',
+    borderColor: colors.borderStrong,
   },
   vsText: { color: colors.text, fontFamily: fonts.black, fontSize: 16, letterSpacing: 1 },
   cardsWrap: { flexWrap: 'wrap' },
@@ -436,8 +437,8 @@ const s = StyleSheet.create({
     alignSelf: 'center',
     minWidth: 220,
     borderWidth: 1.5,
-    borderColor: '#3A4A9A',
-    backgroundColor: 'rgba(14, 22, 64, 0.9)',
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.fieldStrong,
     borderRadius: radius.pill,
     paddingHorizontal: space.sm,
     minHeight: 50,

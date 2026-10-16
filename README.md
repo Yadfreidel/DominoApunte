@@ -31,22 +31,14 @@ La app funciona completa **sin servidor y sin conexión**. El servidor solo hace
 - Gana el primero que alcanza o supera la meta. Desde ahí se puede jugar la revancha (mismos participantes, marcadores en cero) o empezar una partida nueva.
 - Solo se aceptan números enteros no negativos (máximo 1000 por mano).
 
-**Menú principal (☰):** Nueva partida, Partida en curso, Historial, Estadísticas, Configuración y Administración. Administración solo aparece para administradores, pero eso no es la protección real (ver [Seguridad](#seguridad)).
+**Menú principal (☰):** Nueva partida, Partida en curso, Historial, Torneos, Estadísticas, Rivales y Configuración. El panel de administración **no aparece en el menú**: se entra escribiendo `/admin` en la dirección (ver [Panel de administración privado](#panel-de-administración-privado)).
 
 **Historial**
 - Guarda la fecha, los participantes, la modalidad, la meta, el resultado y el detalle de cada mano.
 - Filtros por fecha (hoy, 7 días, 30 días o un rango), por jugador y por estado: pendiente, terminada o cancelada.
 - El detalle es de **solo lectura**: no hay controles para modificar resultados.
 
-**Panel de administración** (adaptable: barra lateral en escritorio, pestañas en móvil)
-- Inicio con indicadores de jugadores, partidas, partidas activas, terminadas, canceladas y correcciones.
-- Jugadores: alta, renombrar, desactivar o eliminar, y sus estadísticas.
-- Partidas: filtros, historial de manos, corrección o eliminación de manos, y cancelar, reabrir o eliminar partidas.
-- Ranking por partidas ganadas, con victorias, derrotas y porcentaje de victorias.
-- Registro de correcciones con fecha, motivo y responsable. Toda modificación pide un motivo obligatorio.
-- Configuración de las metas predeterminadas y las modalidades que se envían a todos los dispositivos.
-- Usuarios: crear administradores o anotadores, cambiar rol o contraseña, y desactivar cuentas.
-- Toda eliminación pide confirmación explícita.
+**Panel de administración privado:** ver la sección [Panel de administración privado](#panel-de-administración-privado).
 
 ---
 
@@ -87,6 +79,84 @@ El servidor la aplica solo al arrancar. Las partidas antiguas quedan como no-pr�
 - El ranking del panel excluye las partidas de práctica.
 - Las correcciones administrativas de una partida de torneo se rechazan (409) si el enfrentamiento siguiente ya empezó.
 
+## Panel de administración privado
+
+Se entra en **`/admin`**; no hay enlaces en el menú público. Acceso con **correo y contraseña** de una cuenta de propietario o administrador, con **¿Olvidaste tu contraseña?** y **Salir**. No existe registro público: las cuentas se crean desde el servidor o desde el panel.
+
+**Roles**
+- **Propietario:** control total. Es el único que crea o modifica administradores. **Solo se asigna desde el servidor**, nunca desde la app.
+- **Administrador:** usa todos los módulos y gestiona anotadores.
+- **Anotador:** registra y sincroniza sus partidas; no entra al panel.
+- Los **perfiles de jugador** son distintos de las cuentas: un jugador no necesita cuenta. Una cuenta se puede vincular a un perfil desde **Cuentas**.
+
+**Cómo asignarte el rol de propietario de forma segura**
+1. En la computadora donde está el servidor (con `server/.env` apuntando a Supabase), ejecuta:
+   ```bash
+   cd server
+   npm run set-owner -- tunombre --email tu@correo.com
+   ```
+2. Escribe la contraseña dos veces cuando la pida; no se muestra ni queda en el historial. Mínimo 10 caracteres.
+3. Entra en `https://tu-app/admin` con ese correo.
+
+Repetir el comando restablece la contraseña y cierra todas las sesiones de la cuenta.
+
+**Módulos**
+
+| Módulo | Qué hace |
+| --- | --- |
+| Resumen | Jugadores, partidas, en curso, torneos activos, de prueba, papelera, últimas actividades y partidas recientes (datos reales del servidor). |
+| Partidas | Filtros por jugador, fecha, estado y tipo, con paginación. El detalle permite corregir y eliminar manos, cancelar o reabrir, marcar como prueba y enviar a la papelera. |
+| Jugadores | Búsqueda y paginación. Editar nombre y foto, desactivar el perfil, bloquear la cuenta vinculada y enviar a la papelera (el historial se conserva). |
+| Duplicados | Detecta nombres iguales sin contar tildes ni mayúsculas; también permite fusión manual. Se elige el perfil principal, se ve una vista previa (partidas, torneos y conflictos) y se fusiona en una sola transacción. Se bloquea si dejaría a una persona dos veces en una partida o en un torneo. Los nombres anteriores quedan como alias para que no se vuelvan a crear. |
+| Torneos | Crear (con organizador), pausar, reanudar y cancelar. Cambiar el nombre de una pareja, reemplazar jugadores de quien todavía no jugó y volver a sortear mientras no haya partidas. Los resultados se corrigen desde la partida; quedan cerrados si el enfrentamiento siguiente ya empezó. |
+| Reglas | Meta y modalidad predeterminadas y penalización opcional de **puntos por pase**. Son sugerencias para partidas nuevas: el usuario las cambia en cada partida, y cada partida guarda sus propias reglas, así que nada existente cambia. |
+| Pruebas | Lista de partidas de prueba o práctica (no cuentan en estadísticas) y **Limpiar pruebas**, que las envía a la papelera sin tocar las oficiales. |
+| Papelera | Restaurar partidas y perfiles, o eliminarlos definitivamente escribiendo `ELIMINAR`, viendo antes sus dependencias. Si restaurar genera un conflicto (por ejemplo, otra partida ya ocupa ese enfrentamiento o un jugador está en la papelera), se explica y no se restaura nada. Un perfil con historial no se borra definitivamente: se deja en la papelera o se fusiona. |
+| Auditoría | Autor, fecha, acción, motivo y valores anteriores y nuevos de cada cambio administrativo, con filtros y paginación. Nunca guarda contraseñas, hashes, tokens ni imágenes completas. |
+| Exportar | CSV de partidas, resultados, jugadores y estadísticas según los filtros. Sin correos, contraseñas, fotos ni datos de cuentas, y con las celdas protegidas contra fórmulas de Excel. |
+| Ranking | Solo partidas oficiales (sin pruebas ni papelera). |
+| Identidad visual | Nombre de la app, subtítulo, texto de bienvenida y logo (PNG, JPEG o WebP; máximo 300 KB, entre 32 y 1024 px, validado también en el servidor). Tiene vista previa, Guardar, Cancelar y **Restaurar originales**. |
+| Apariencia | Temas Original, Verde dominó, Azul, Morado, Rojo y Oscuro, o seis colores propios: principal, secundario, fondo, tarjetas, texto y botones. Vista previa, comprobación de contraste (WCAG 4.5:1 para texto y 3:1 para acentos), Guardar, Cancelar y **Restaurar tema original**. |
+| Cuentas | Crear cuentas (sin registro público), editar el correo, cambiar la contraseña, vincular un perfil de jugador, bloquear o desbloquear, y cambiar el rol (solo el propietario). |
+
+Todas las acciones destructivas piden confirmación y motivo, y los botones se bloquean mientras se guarda para evitar envíos duplicados.
+
+**Tema global.** Los colores están centralizados en [`mobile/src/domain/appearance.ts`](mobile/src/domain/appearance.ts) y [`mobile/src/theme.ts`](mobile/src/theme.ts). Así se aplica el tema:
+- El tema elegido se guarda en el servidor y en cada dispositivo.
+- Al abrir la app se aplica antes de dibujar la primera pantalla: lo leen [`mobile/index.js`](mobile/index.js) → `src/boot/theme`, y en la web también un script de `public/index.html` que pinta el fondo. Por eso no hay destellos.
+- En la web, el administrador ve el tema al instante (la app se recarga). Los demás dispositivos lo ven la próxima vez que abran la app.
+
+En la web, además:
+- El foco del teclado se marca con un contorno grueso del color principal.
+- Los botones cambian suavemente al pasar el cursor.
+- Las transiciones se desactivan si el sistema pide reducir el movimiento.
+
+**Recuperación de contraseña por correo.** Necesita una cuenta de [Resend](https://resend.com) y tres variables en `server/.env`:
+
+| Variable | Valor |
+| --- | --- |
+| `RESEND_API_KEY` | La clave de la API. |
+| `MAIL_FROM` | Un remitente de un dominio verificado en Resend. |
+| `APP_URL` | La dirección pública de la app. |
+
+Cómo funciona el enlace:
+- Vence en 30 minutos y sirve una sola vez.
+- El servidor guarda solo su hash.
+- La respuesta es la misma exista o no la cuenta.
+- Al usarlo se cierran todas las sesiones de la cuenta.
+
+Sin esas variables, el panel avisa que la recuperación por correo no está configurada. Entonces la contraseña se restablece con `npm run set-owner`.
+
+**Migración (`server/sql/schema.sql`, bloque «2026-11»).** No borra datos y se aplica sola al arrancar el servidor. Agrega:
+- Correo, rol `propietario` y vínculo con un perfil de jugador en las cuentas.
+- La tabla `password_resets`.
+- Foto y papelera en los jugadores, y la tabla `player_aliases`.
+- Papelera y `rules_json` en las partidas.
+- Estado `pausado` y `admin_revision` en los torneos.
+- El disparador que hace inmutable la auditoría.
+
+Todas las tablas nuevas tienen RLS. En Supabase, después de arrancar el servidor una vez, vuelve a ejecutar [`server/sql/supabase-permisos.sql`](server/sql/supabase-permisos.sql) en el SQL Editor para retirar a las claves públicas el acceso a las tablas nuevas.
+
 ## Requisitos
 
 - **Node.js 22 o superior** (probado con Node 24).
@@ -121,10 +191,10 @@ Edita `.env` y define **`JWT_SECRET`**, un valor aleatorio de al menos 32 caract
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
 ```
 
-Crea el primer administrador. La contraseña se pide por teclado y nunca queda en el código:
+Asigna la cuenta del **propietario** (tu cuenta). La contraseña se pide por teclado y nunca queda en el código ni en el historial de la terminal:
 
 ```bash
-npm run create-admin -- jefa
+npm run set-owner -- tunombre --email tu@correo.com
 ```
 
 Inicia la API:
@@ -134,8 +204,8 @@ npm start          # http://localhost:4000
 ```
 
 Notas:
-- `npm run create-user -- mesa1` crea un **anotador**: puede sincronizar partidas, pero no entra al panel. Los demás usuarios también se pueden crear desde el panel, en la sección Usuarios.
-- Repetir `create-admin` con un usuario existente le restablece la contraseña y cierra sus sesiones (útil si se olvida).
+- `npm run create-user -- mesa1` crea un **anotador**: registra y sincroniza sus partidas, pero no entra al panel. Las cuentas también se crean desde el panel, en **Cuentas**.
+- Repetir `set-owner` (o `create-admin`) con un usuario existente le restablece la contraseña y cierra sus sesiones. Es la recuperación de emergencia si no está configurado el correo.
 
 ## 3. Conectar la app con el servidor
 
@@ -145,7 +215,7 @@ En la app, ve a **Configuración → Servidor y cuenta**:
    - Teléfono físico: usa la IP de la computadora en la red local, por ejemplo `http://192.168.1.50:4000` (`localhost` no funciona desde el teléfono).
    - Emulador de Android: `http://10.0.2.2:4000`.
    - Navegador en la misma computadora: `http://localhost:4000`.
-2. Inicia sesión. Si la cuenta es de administrador, aparece **Administración** en el menú.
+2. Inicia sesión con tu correo (o usuario) para sincronizar tus partidas. El panel está en `/admin` (por ejemplo `https://tu-app.vercel.app/admin`).
 
 También puedes preconfigurar la dirección copiando `mobile/.env.example` como `mobile/.env`.
 
@@ -193,10 +263,10 @@ El servidor usa **PostgreSQL**. Si `DATABASE_URL` está vacío, usa PGlite (Post
    DATABASE_SSL_CA=./supabase-ca.crt
    DATABASE_POOL_MAX=5
    ```
-6. **Crea el primer administrador** directamente en Supabase:
+6. **Asigna tu cuenta de propietario** directamente en Supabase:
    ```bash
    cd server
-   npm run create-admin -- tuusuario
+   npm run set-owner -- tunombre --email tu@correo.com
    ```
 7. **Arranca el servidor** con `npm start`. Debe mostrar `Base de datos: PostgreSQL (DATABASE_URL)`.
 
@@ -208,7 +278,9 @@ El servidor usa **PostgreSQL**. Si `DATABASE_URL` está vacío, usa PGlite (Post
 
 ## Seguridad
 
-- **Autorización en el servidor:** todas las rutas `/api/admin/*` exigen un token válido, y en **cada petición** el servidor vuelve a cargar el usuario de la base de datos para verificar que siga activo, que su rol sea `admin` y que no se haya invalidado su sesión. Ocultar el menú solo afecta a la interfaz; un anotador que intenta entrar al panel o llamar a la API recibe `403`, y sin token se recibe `401`.
+- **Autorización en el servidor:** todas las rutas `/api/admin/*` exigen un token válido, y en **cada petición** el servidor vuelve a cargar el usuario de la base de datos para verificar que siga activo, que su rol sea `propietario` o `admin` y que no se haya invalidado su sesión. La pantalla `/admin` solo decide qué mostrar; un anotador que entra al panel o llama a la API recibe `403`, y sin token se recibe `401`.
+- **Dueño de cada partida:** al sincronizar, una cuenta solo puede modificar las partidas y torneos que registró ella. Los administradores pueden modificar cualquiera.
+- **Base de datos:** el esquema `domino` no está publicado por la API de Supabase y tiene RLS activado sin políticas. El registro de auditoría tiene un disparador que impide editarlo o borrarlo, incluso desde el propio servidor.
 - **Contraseñas** con hash scrypt y sal aleatoria. Cuenta con un mínimo de 10 caracteres, comparación en tiempo constante y bloqueo de 15 minutos tras 5 intentos fallidos.
 - **Sesiones:** JWT HS256 firmado con `JWT_SECRET`, con una duración de 12 horas que se puede cambiar. Cambiar la contraseña, el rol o desactivar al usuario invalida sus sesiones al instante.
 - **Token en el dispositivo:** se guarda en el almacén cifrado del sistema (Keychain o Keystore, con `expo-secure-store`). En la versión web se usa `sessionStorage`.
@@ -227,8 +299,9 @@ El servidor usa **PostgreSQL**. Si `DATABASE_URL` está vacío, usa PGlite (Post
 
 - Las partidas se anotan siempre en el dispositivo. Con sesión iniciada, se envían al servidor a los ~1,5 s de cada cambio, cada minuto y al volver a abrir la app. Sin conexión quedan pendientes y se envían después; Configuración muestra cuántas faltan.
 - Si un administrador **corrige** una partida, su versión prevalece. El dispositivo la recibe en la siguiente sincronización y puede seguir anotando sobre ella.
-- Si un administrador **elimina** una partida, también desaparece de los dispositivos y no vuelve a subirse.
-- Las metas y modalidades que define el administrador se aplican en los dispositivos con sesión iniciada.
+- Si un administrador envía una partida a la **papelera**, desaparece de los dispositivos y deja de contar. Si la restaura, el dispositivo de su dueño la recupera. Si la elimina definitivamente, no vuelve a subirse.
+- Los torneos que el administrador crea, pausa, cancela o corrige llegan al dispositivo de su organizador al sincronizar.
+- Los valores predeterminados, la identidad visual y el tema se leen de `/api/public/config` al abrir la app, aun sin sesión, y quedan guardados para usarse sin conexión.
 - Las estadísticas de la app se calculan con las partidas del dispositivo. El ranking del panel abarca todas las partidas sincronizadas.
 
 ---
@@ -323,9 +396,9 @@ Se necesita una cuenta gratuita de Expo. Antes, agrega `android.package` / `ios.
 ## Pruebas
 
 ```bash
-cd mobile && npm test          # reglas, torneos, estadísticas, sorteos, rivales, resumen, voz y persistencia (65 pruebas)
+cd mobile && npm test          # reglas, torneos, estadísticas, sorteos, rivales, resumen, temas, reglas por partida, voz y persistencia (76 pruebas)
 cd mobile && npm run typecheck && npx expo lint
-cd server && npm test          # autenticación, permisos, sincronización, torneos, migración, visión simulada y base de datos (45 pruebas)
+cd server && npm test          # autenticación, roles, recuperación, papelera, fusiones, torneos, auditoría, exportación, temas, migración y visión simulada (64 pruebas)
 ```
 
 Además, se verificó la app web real contra la API con un navegador automatizado: 32 comprobaciones de creación, suma, edición, deshacer, ganador, recuperación tras recargar, revancha, historial, bloqueo de un anotador al entrar al panel, corrección administrativa y su llegada al dispositivo.
@@ -334,7 +407,7 @@ Además, se verificó la app web real contra la API con un navegador automatizad
 
 ## Personalizar el diseño
 
-Los colores, la tipografía y los radios están centralizados en [`mobile/src/theme.ts`](mobile/src/theme.ts). La paleta sigue el diseño de referencia: fondo azul marino con luces de estadio, verde lima para el primer lado y morado para el segundo. Con 3 o 4 jugadores se agregan cian y naranja. Los números usan *Barlow Condensed*.
+Los colores, la tipografía y los radios están centralizados en [`mobile/src/theme.ts`](mobile/src/theme.ts), y los temas en [`mobile/src/domain/appearance.ts`](mobile/src/domain/appearance.ts). El administrador puede cambiar el tema global desde el panel (Apariencia). La paleta sigue el diseño de referencia: fondo azul marino con luces de estadio, verde lima para el primer lado y morado para el segundo. Con 3 o 4 jugadores se agregan cian y naranja. Los números usan *Barlow Condensed*.
 
 ## Estructura del código
 

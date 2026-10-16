@@ -56,7 +56,7 @@ export function RankingTable({ rows, onPressRow }: { rows: RankingRow[]; onPress
             onPress={() => onPressRow(r.key)}
             accessibilityRole="button"
             accessibilityLabel={`${i + 1}. ${r.name}: ${r.wins} victorias, ${r.losses} derrotas, ${r.winRate}%`}
-            style={({ pressed }) => [s.row, pressed && { backgroundColor: 'rgba(255,255,255,0.04)' }]}
+            style={({ pressed }) => [s.row, pressed && { backgroundColor: colors.pressedFaint }]}
           >
             {content}
           </Pressable>
@@ -90,7 +90,7 @@ const s = StyleSheet.create({
   num: { width: 34, textAlign: 'center', color: colors.text, fontSize: 16, fontWeight: '700' },
   pct: { width: 72, alignItems: 'flex-end', gap: 3 },
   pctText: { color: colors.text, fontWeight: '700', fontSize: 15 },
-  bar: { width: 60, height: 4, borderRadius: 2, backgroundColor: 'rgba(160,107,255,0.2)', overflow: 'hidden' },
+  bar: { width: 60, height: 4, borderRadius: 2, backgroundColor: colors.purpleTrack, overflow: 'hidden' },
   barFill: { height: '100%', backgroundColor: colors.purple },
   legend: { color: colors.textDim, fontSize: 12, marginTop: space.sm },
 });

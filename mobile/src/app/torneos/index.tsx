@@ -11,6 +11,7 @@ import { colors, fonts, radius, space } from '@/theme';
 
 const STATUS = {
   en_curso: { label: 'En curso', color: colors.warning, icon: 'time-outline' },
+  pausado: { label: 'En pausa', color: colors.warning, icon: 'pause-circle-outline' },
   terminado: { label: 'Terminado', color: colors.success, icon: 'trophy-outline' },
   cancelado: { label: 'Cancelado', color: colors.danger, icon: 'close-circle-outline' },
 } as const;
@@ -33,7 +34,7 @@ export default function Tournaments() {
         />
       ) : (
         list.map((r) => {
-          const st = STATUS[r.status];
+          const st = STATUS[r.status === 'en_curso' && r.tournament.status === 'pausado' ? 'pausado' : r.status];
           const t = r.tournament;
           return (
             <Pressable

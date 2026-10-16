@@ -26,7 +26,7 @@ export function Avatar({ name, colorIndex, size = 48, photo }: { name: string; c
       {photo ? (
         <Image source={{ uri: photo }} style={{ width: '100%', height: '100%', borderRadius: size / 2 }} />
       ) : (
-        <LinearGradient colors={[c.soft.replace(/[\d.]+\)$/, '0.45)'), 'rgba(10,16,52,0.95)']} style={[StyleSheet.absoluteFill, s.center]}>
+        <LinearGradient colors={[c.soft.replace(/[\d.]+\)$/, '0.45)'), colors.avatarBase]} style={[StyleSheet.absoluteFill, s.center]}>
           {name.trim() ? (
             <Text style={[s.initials, { fontSize: size * 0.4, color: c.main }]}>{initials(name)}</Text>
           ) : (
@@ -124,7 +124,7 @@ function SheetOption({ icon, label, onPress, danger }: { icon: keyof typeof Ioni
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      style={({ pressed }) => [s.option, pressed && { backgroundColor: 'rgba(255,255,255,0.06)' }]}
+      style={({ pressed }) => [s.option, pressed && { backgroundColor: colors.pressed }]}
     >
       <Ionicons name={icon} size={22} color={danger ? colors.danger : colors.text} />
       <Text style={[s.optionText, danger && { color: colors.danger }]}>{label}</Text>
@@ -210,7 +210,7 @@ const s = StyleSheet.create({
     borderRadius: 20,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: colors.pressed,
     borderWidth: 1,
     borderColor: colors.border,
   },

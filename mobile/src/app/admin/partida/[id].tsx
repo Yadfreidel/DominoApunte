@@ -3,7 +3,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { FormModal } from '@/components/admin/FormModal';
-import { CorrectionList } from '@/components/admin/sections';
+import { AuditList, openTournament } from '@/components/admin/common';
 import { useAdminQuery } from '@/components/admin/useAdminQuery';
 import { AppHeader } from '@/components/AppHeader';
 import { useDialogs } from '@/components/Dialogs';
@@ -20,7 +20,9 @@ export default function AdminGameDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { api, syncNow } = useStore();
   const { askReason, toast } = useDialogs();
-  const q = useAdminQuery<{ game: ServerGame; corrections: Correction[] }>(`/admin/games/${encodeURIComponent(id)}`);
+  const q = useAdminQuery<{ game: ServerGame; corrections: Correction[]; tournament: { id: string; name: string } | null }>(
+    `/admin/games/${encodeURIComponent(id)}`,
+  );
   const [editing, setEditing] = useState<{ hand: Hand; number: number } | null>(null);
 
   const back = () => goBackOr({ pathname: '/admin', params: { seccion: 'partidas' } });
@@ -45,12 +47,13 @@ export default function AdminGameDetail() {
     );
   }
 
-  const { game, corrections } = q.data;
+  const { game, corrections, tournament } = q.data;
+  const trashed = !!game.deletedAt;
   const running = runningTotals(game);
   const sideIndex = new Map(game.sides.map((sd, i) => [sd.id, i]));
 
   const afterChange = (updated?: ServerGame) => {
-    if (updated) q.setData({ game: updated, corrections });
+    if (updated) q.setData({ game: updated, corrections, tournament });
     void q.reload();
     void syncNow();
   };
@@ -93,19 +96,47 @@ export default function AdminGameDetail() {
     }
   };
 
-  const deleteGame = async () => {
+  const trashGame = async () => {
     const reason = await askReason({
-      title: '¿Eliminar la partida definitivamente?',
-      message: 'Se borrarán la partida y todas sus manos. Esta acción no se puede deshacer.',
-      confirmLabel: 'Eliminar partida',
+      title: '¿Enviar la partida a la papelera?',
+      message: 'Deja de contar en estadísticas y ranking, y el dispositivo que la registró la retira al sincronizar. Se puede restaurar desde la Papelera.',
+      confirmLabel: 'Enviar a la papelera',
       destructive: true,
     });
     if (!reason) return;
     try {
       await api(`/admin/games/${game.id}`, { method: 'DELETE', body: { reason } });
-      toast('Partida eliminada');
+      toast('Partida en la papelera');
       void syncNow();
       back();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Error', 'error');
+    }
+  };
+
+  const togglePractice = async () => {
+    const reason = await askReason({
+      title: game.practice ? '¿Marcar como partida oficial?' : '¿Marcar como partida de prueba?',
+      message: game.practice ? 'Volverá a contar en estadísticas y ranking.' : 'Dejará de contar en estadísticas y ranking. Podrás limpiarla desde «Pruebas».',
+      confirmLabel: game.practice ? 'Marcar oficial' : 'Marcar prueba',
+    });
+    if (!reason) return;
+    try {
+      const res = await api<{ game: ServerGame }>(`/admin/games/${game.id}`, { method: 'PATCH', body: { practice: !game.practice, reason } });
+      toast(game.practice ? 'Partida oficial' : 'Partida marcada como prueba');
+      afterChange(res.game);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'Error', 'error');
+    }
+  };
+
+  const restore = async () => {
+    const reason = await askReason({ title: '¿Restaurar la partida?', confirmLabel: 'Restaurar' });
+    if (!reason) return;
+    try {
+      const res = await api<{ game: ServerGame }>(`/admin/trash/games/${game.id}/restore`, { method: 'POST', body: { reason } });
+      toast('Partida restaurada');
+      afterChange(res.game);
     } catch (err) {
       toast(err instanceof Error ? err.message : 'Error', 'error');
     }
@@ -125,8 +156,23 @@ export default function AdminGameDetail() {
         </Text>
         <Text style={s.muted}>Participantes: {game.participants.map((p) => p.name).join(', ')}</Text>
         {game.finishedAt ? <Text style={s.muted}>Terminó: {formatDateTime(game.finishedAt)}</Text> : null}
+        {game.practice ? <Text style={[s.muted, { color: colors.info, fontWeight: '700' }]}>Partida de prueba: no cuenta en estadísticas.</Text> : null}
+        {game.rules?.passPoints ? <Text style={s.muted}>Regla elegida: {game.rules.passPoints} puntos por pase</Text> : null}
+        {tournament ? (
+          <Text style={[s.muted, { color: colors.purple, fontWeight: '700' }]} onPress={() => openTournament(tournament.id)} accessibilityRole="link">
+            Torneo: {tournament.name}
+          </Text>
+        ) : null}
         <Text style={s.id}>ID: {game.id}</Text>
       </Card>
+
+      {trashed ? (
+        <Card accent={colors.danger} style={{ gap: space.sm }}>
+          <Text style={[s.cardTitle, { color: colors.danger }]}>En la papelera desde {formatDateTime(game.deletedAt)}</Text>
+          <Text style={s.muted}>No cuenta en estadísticas. Restáurala para poder corregirla.</Text>
+          <Button label="Restaurar partida" icon="arrow-undo-outline" onPress={restore} />
+        </Card>
+      ) : null}
 
       <View style={[s.cards, game.sides.length > 2 && { flexWrap: 'wrap' }]}>
         {game.sides.map((sd, i) => (
@@ -165,6 +211,8 @@ export default function AdminGameDetail() {
                   {game.sides.map((sd) => running[i][sd.id]).join(' - ')}
                 </Text>
               </View>
+              {trashed ? null : (
+              <>
               <Pressable
                 onPress={() => setEditing({ hand: h, number: i + 1 })}
                 accessibilityRole="button"
@@ -181,23 +229,28 @@ export default function AdminGameDetail() {
               >
                 <Ionicons name="trash-outline" size={22} color={colors.danger} />
               </Pressable>
+              </>
+              )}
             </View>
           );
         })}
       </Card>
 
+      {trashed ? null : (
       <View style={s.actions}>
         {game.status !== 'cancelada' ? (
           <Button label="Cancelar partida" icon="close-circle-outline" variant="outline" onPress={() => changeStatus('cancelada')} style={s.flex} />
         ) : (
           <Button label="Reabrir partida" icon="refresh" variant="outline" onPress={() => changeStatus('pendiente')} style={s.flex} />
         )}
-        <Button label="Eliminar partida" icon="trash-outline" variant="danger" onPress={deleteGame} style={s.flex} />
+        <Button label={game.practice ? 'Marcar como oficial' : 'Marcar como prueba'} icon="flask-outline" variant="outline" onPress={togglePractice} style={s.flex} />
+        <Button label="Enviar a la papelera" icon="trash-outline" variant="danger" onPress={trashGame} style={s.flex} />
       </View>
+      )}
 
       <Card style={{ gap: space.sm }}>
-        <Text style={s.cardTitle}>Correcciones de esta partida</Text>
-        <CorrectionList corrections={corrections} />
+        <Text style={s.cardTitle}>Cambios administrativos de esta partida</Text>
+        <AuditList corrections={corrections} />
       </Card>
 
       <FormModal

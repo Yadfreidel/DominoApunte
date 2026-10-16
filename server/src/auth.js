@@ -36,8 +36,19 @@ export function signToken(user, secret, expiresIn) {
   });
 }
 
+export const ADMIN_ROLES = ['propietario', 'admin'];
+export const isAdminRole = (role) => ADMIN_ROLES.includes(role);
+
+/** Datos de la cuenta que se pueden enviar a la app (nunca el hash de la contraseña). */
 export function publicUser(user) {
-  return { id: user.id, username: user.username, role: user.role, active: !!user.active };
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email ?? null,
+    role: user.role,
+    active: !!user.active,
+    playerId: user.player_id ?? null,
+  };
 }
 
 /**
@@ -65,9 +76,10 @@ export function authenticate(db, secret) {
   };
 }
 
-export function requireRole(role) {
+/** Permite el paso solo a los roles indicados (se comprueba en el servidor en cada petición). */
+export function requireRole(...roles) {
   return (req, res, next) => {
-    if (req.user?.role !== role) {
+    if (!roles.includes(req.user?.role)) {
       return res.status(403).json({ error: 'No tienes permisos para realizar esta acción.' });
     }
     next();

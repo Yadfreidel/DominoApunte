@@ -1,51 +1,42 @@
+import { createHash, randomBytes } from 'node:crypto';
 import cors from 'cors';
 import express from 'express';
+import { registerAdminRoutes } from './admin.js';
 import {
+  ADMIN_ROLES,
   authenticate,
   createLoginLimiter,
   hashPassword,
+  isAdminRole,
   publicUser,
   requireRole,
   signToken,
   validatePasswordStrength,
   verifyPassword,
 } from './auth.js';
-import { DEFAULT_SETTINGS, getSettings, saveSettings } from './db.js';
+import { getPublicConfig, getSettings } from './db.js';
 import { isNonNegativeInt, MAX_HAND_POINTS, MAX_TARGET, recompute } from './domain.js';
+import { bad, cleanName, EMAIL_RE, HttpError, ID_RE, MODES, notFound, STATUSES } from './http.js';
+import { createMailer } from './mail.js';
+import { nextMatchId } from './tournament.js';
+import { ValidationError } from './validation.js';
 import { createDominoAnalyzer, VisionError } from './vision.js';
 
-class HttpError extends Error {
-  constructor(status, message) {
-    super(message);
-    this.status = status;
-  }
-}
-
-const bad = (message) => new HttpError(400, message);
-const notFound = (message) => new HttpError(404, message);
-
-const STATUSES = ['pendiente', 'terminada', 'cancelada'];
-const MODES = ['individual', 'parejas'];
-const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-const MAX_NAME = 40;
-
-function cleanName(value, field = 'El nombre') {
-  if (typeof value !== 'string') throw bad(`${field} es obligatorio.`);
-  const name = value.trim().replace(/\s+/g, ' ');
-  if (!name) throw bad(`${field} es obligatorio.`);
-  if (name.length > MAX_NAME) throw bad(`${field} no puede superar ${MAX_NAME} caracteres.`);
-  return name;
-}
-
-function requireReason(body) {
-  const reason = typeof body?.reason === 'string' ? body.reason.trim() : '';
-  if (reason.length < 3) throw bad('Indica el motivo de la corrección (mínimo 3 caracteres).');
-  if (reason.length > 500) throw bad('El motivo no puede superar 500 caracteres.');
-  return reason;
-}
+export { nextMatchId };
+const RESET_TTL_MS = 30 * 60 * 1000;
+export { bad, cleanName, HttpError, notFound, requireReason } from './http.js';
 
 function isIsoDate(value) {
   return typeof value === 'string' && value.length <= 40 && !Number.isNaN(Date.parse(value));
+}
+
+/** Reglas opcionales de una partida (copiadas al crearla). */
+export function cleanRules(rules) {
+  if (rules === undefined || rules === null) return null;
+  if (typeof rules !== 'object') throw bad('Reglas inválidas.');
+  const passPoints = rules.passPoints ?? 0;
+  if (!isNonNegativeInt(passPoints, MAX_HAND_POINTS)) throw bad(`Los puntos por pase deben ser un entero entre 0 y ${MAX_HAND_POINTS}.`);
+  return { passPoints };
 }
 
 /** Valida una partida enviada por un dispositivo. Devuelve una copia normalizada. */
@@ -128,33 +119,43 @@ export function validateIncomingGame(g) {
       typeof g.starterParticipantId === 'string' && participantIds.has(g.starterParticipantId) ? g.starterParticipantId : null,
     tournamentId: typeof g.tournamentId === 'string' && ID_RE.test(g.tournamentId) ? g.tournamentId : null,
     matchId: typeof g.matchId === 'string' && ID_RE.test(g.matchId) ? g.matchId : null,
+    rules: cleanRules(g.rules),
   };
 }
 
-/** Valida un torneo enviado por un dispositivo. Devuelve una copia normalizada. */
+export const TOURNAMENT_STATUSES = ['activo', 'pausado', 'cancelado'];
+
+/** Valida la estructura de un torneo (de un dispositivo o del panel). Devuelve una copia normalizada. */
 export function validateIncomingTournament(t) {
   if (!t || typeof t !== 'object' || !ID_RE.test(t.id ?? '')) throw bad('Torneo inválido.');
   const name = cleanName(t.name, 'El nombre del torneo');
   if (!MODES.includes(t.mode)) throw bad('Modalidad de torneo inválida.');
   if (!Number.isInteger(t.target) || t.target < 1 || t.target > MAX_TARGET) throw bad('Meta de torneo inválida.');
-  if (t.status !== 'activo' && t.status !== 'cancelado') throw bad('Estado de torneo inválido.');
+  if (!TOURNAMENT_STATUSES.includes(t.status)) throw bad('Estado de torneo inválido.');
   if (!isIsoDate(t.createdAt) || !isIsoDate(t.updatedAt)) throw bad('Fechas de torneo inválidas.');
   if (!Number.isInteger(t.revision) || t.revision < 0) throw bad('Revisión de torneo inválida.');
   if (!Array.isArray(t.entrants) || t.entrants.length < 2 || t.entrants.length > 64) throw bad('Participantes de torneo inválidos.');
   const size = t.mode === 'parejas' ? 2 : 1;
   const seen = new Set();
+  const seenNames = new Set();
   const entrants = t.entrants.map((e) => {
     if (!ID_RE.test(e?.id ?? '') || !Array.isArray(e.players) || e.players.length !== size) throw bad('Participante de torneo inválido.');
     const players = e.players.map((p) => {
       if (!ID_RE.test(p?.playerId ?? '')) throw bad('Jugador de torneo inválido.');
-      if (seen.has(p.playerId)) throw bad('Un jugador aparece dos veces en el torneo.');
+      const playerName = cleanName(p.name, 'El nombre del jugador');
+      if (seen.has(p.playerId) || seenNames.has(playerName.toLowerCase())) throw bad('Un jugador aparece dos veces en el torneo.');
       seen.add(p.playerId);
-      return { playerId: p.playerId, name: cleanName(p.name, 'El nombre del jugador') };
+      seenNames.add(playerName.toLowerCase());
+      return { playerId: p.playerId, name: playerName };
     });
-    return { id: e.id, name: cleanName(e.name, 'El nombre del participante').slice(0, 80), players };
+    const entrantName = typeof e.name === 'string' ? e.name.trim().replace(/\s+/g, ' ') : '';
+    if (!entrantName || entrantName.length > 80) throw bad('El nombre del participante es obligatorio (máximo 80 caracteres).');
+    return { id: e.id, name: entrantName, players };
   });
   const entrantIds = new Set(entrants.map((e) => e.id));
+  if (entrantIds.size !== entrants.length) throw bad('Participantes de torneo repetidos.');
   if (!Array.isArray(t.rounds) || t.rounds.length < 1 || t.rounds.length > 7) throw bad('Cuadro de torneo inválido.');
+  const placed = [];
   const rounds = t.rounds.map((round, r) => {
     const expected = 2 ** (t.rounds.length - 1 - r);
     if (!Array.isArray(round) || round.length !== expected) throw bad('Cuadro de torneo inválido.');
@@ -166,24 +167,37 @@ export function validateIncomingTournament(t) {
         if (slots.length !== 2 || !entrantIds.has(slots[0]) || (slots[1] !== null && !entrantIds.has(slots[1]))) {
           throw bad('Cruce de primera ronda inválido.');
         }
+        placed.push(slots[0]);
+        if (slots[1]) placed.push(slots[1]);
         out.slots = [slots[0], slots[1]];
       }
       return out;
     });
   });
-  return { id: t.id, name, mode: t.mode, target: t.target, status: t.status, createdAt: t.createdAt, updatedAt: t.updatedAt, revision: t.revision, entrants, rounds };
+  if (new Set(placed).size !== placed.length || placed.length !== entrants.length) throw bad('Cada participante debe estar una sola vez en el cuadro.');
+  return {
+    id: t.id,
+    name,
+    mode: t.mode,
+    target: t.target,
+    status: t.status,
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+    revision: t.revision,
+    adminRevision: Number.isInteger(t.adminRevision) && t.adminRevision >= 0 ? t.adminRevision : 0,
+    entrants,
+    rounds,
+  };
 }
 
-/** Id del enfrentamiento al que avanza el ganador de matchId, o null si es la final. */
-export function nextMatchId(rounds, matchId) {
-  for (let r = 0; r < rounds.length; r++) {
-    const i = rounds[r].findIndex((m) => m.id === matchId);
-    if (i >= 0) return rounds[r + 1]?.[Math.floor(i / 2)]?.id ?? null;
-  }
-  return null;
-}
-
-export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [], visionAnalyzer = createDominoAnalyzer() }) {
+export function createApp({
+  db,
+  jwtSecret,
+  jwtExpiresIn = '12h',
+  corsOrigins = [],
+  visionAnalyzer = createDominoAnalyzer(),
+  mailer = createMailer(),
+}) {
   if (!jwtSecret || jwtSecret.length < 32) {
     throw new Error('JWT_SECRET es obligatorio y debe tener al menos 32 caracteres.');
   }
@@ -191,7 +205,7 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 'loopback');
-  app.use(cors({ origin: corsOrigins.length ? corsOrigins : '*' }));
+  app.use(cors({ origin: corsOrigins.length ? corsOrigins : '*', exposedHeaders: ['Content-Disposition'] }));
   const smallJson = express.json({ limit: '2mb' });
   // Solo la ruta de conteo de fichas acepta cuerpos grandes (la foto en base64).
   const imageJson = express.json({ limit: '8mb' });
@@ -203,23 +217,24 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
   });
 
   const auth = authenticate(db, jwtSecret);
-  const adminOnly = [auth, requireRole('admin')];
   const limiter = createLoginLimiter();
+  const recoveryLimiter = createLoginLimiter({ maxAttempts: 5, windowMs: 60 * 60 * 1000 });
   const now = () => new Date().toISOString();
+  const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 
   // ---------- Consultas reutilizables ----------
   // `t` es la base de datos o una transacción en curso: ambas tienen get/all/run.
-  const userByName = (t, name) => t.get('SELECT * FROM domino.users WHERE lower(username) = lower($1)', [name]);
+  const userByLogin = (t, login) =>
+    t.get('SELECT * FROM domino.users WHERE lower(username) = lower($1) OR lower(email) = lower($1) ORDER BY id LIMIT 1', [login]);
   const userById = (t, id) => t.get('SELECT * FROM domino.users WHERE id = $1', [id]);
   const playerByName = (t, name) => t.get('SELECT * FROM domino.players WHERE lower(name) = lower($1)', [name]);
   const playerById = (t, id) => t.get('SELECT * FROM domino.players WHERE id = $1', [id]);
-  const gameRow = (t, id) => t.get('SELECT * FROM domino.games WHERE id = $1', [id]);
-  const isDeleted = async (t, id) => !!(await t.get('SELECT 1 AS x FROM domino.deleted_games WHERE id = $1', [id]));
   const toId = (value) => {
     const n = Number(value);
     return Number.isInteger(n) && n > 0 && n < 2 ** 31 ? n : null;
   };
 
+  /** Registro de auditoría. Nunca incluye contraseñas, hashes ni tokens. */
   async function logCorrection(t, req, { entity, entityId, gameId = null, action, reason, before = null, after = null }) {
     await t.run(
       `INSERT INTO domino.corrections (created_at, admin_user_id, admin_username, entity, entity_id, game_id, action, reason, before_json, after_json)
@@ -271,6 +286,9 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
       starterParticipantId: row.starter_participant_id ?? null,
       tournamentId: row.tournament_id ?? null,
       matchId: row.match_id ?? null,
+      rules: row.rules_json ? JSON.parse(row.rules_json) : null,
+      deletedAt: row.deleted_at ?? null,
+      ownerUserId: row.source_user_id ?? null,
     };
   }
 
@@ -298,8 +316,31 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
     return game;
   }
 
-  /** Devuelve el id del jugador con ese nombre, creándolo si no existe (seguro ante altas simultáneas). */
+  function rowToTournament(row) {
+    const data = JSON.parse(row.data_json);
+    return {
+      id: row.id,
+      name: row.name,
+      mode: row.mode,
+      target: row.target,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      revision: row.revision,
+      adminRevision: row.admin_revision ?? 0,
+      ownerUserId: row.source_user_id ?? null,
+      entrants: data.entrants,
+      rounds: data.rounds,
+    };
+  }
+
+  /**
+   * Id del perfil con ese nombre, creándolo si no existe (seguro ante altas simultáneas). Un nombre
+   * anterior (renombrado o fusionado) apunta al perfil vigente para no recrear duplicados.
+   */
   async function ensurePlayer(t, name) {
+    const alias = await t.get('SELECT player_id FROM domino.player_aliases WHERE alias_key = lower($1)', [name]);
+    if (alias) return alias.player_id;
     await t.run(
       'INSERT INTO domino.players (name, active, created_at) VALUES ($1, 1, $2) ON CONFLICT ((lower(name))) DO NOTHING',
       [name, now()],
@@ -312,15 +353,15 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
     await t.run(
       `INSERT INTO domino.games (id, created_at, updated_at, finished_at, status, mode, target, participants_json, sides_json,
                                  winner_side_id, rematch_of, revision, admin_revision, source_user_id,
-                                 practice, starter_participant_id, tournament_id, match_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+                                 practice, starter_participant_id, tournament_id, match_id, rules_json)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
        ON CONFLICT (id) DO UPDATE SET
          updated_at = excluded.updated_at, finished_at = excluded.finished_at, status = excluded.status,
          mode = excluded.mode, target = excluded.target, participants_json = excluded.participants_json,
          sides_json = excluded.sides_json, winner_side_id = excluded.winner_side_id, rematch_of = excluded.rematch_of,
          revision = excluded.revision, admin_revision = excluded.admin_revision,
          practice = excluded.practice, starter_participant_id = excluded.starter_participant_id,
-         tournament_id = excluded.tournament_id, match_id = excluded.match_id`,
+         tournament_id = excluded.tournament_id, match_id = excluded.match_id, rules_json = excluded.rules_json`,
       [
         game.id,
         game.createdAt,
@@ -340,6 +381,7 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
         game.starterParticipantId ?? null,
         game.tournamentId ?? null,
         game.matchId ?? null,
+        game.rules ? JSON.stringify(game.rules) : null,
       ],
     );
     await t.run('DELETE FROM domino.hands WHERE game_id = $1', [game.id]);
@@ -377,63 +419,127 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
     const updated = recompute(game, game.hands, now());
     updated.updatedAt = now();
     updated.revision = game.revision + 1;
-    await writeGame(t, updated, { adminRevision: updated.revision });
+    await writeGame(t, updated, { adminRevision: updated.revision, sourceUserId: game.ownerUserId });
     return updated;
   }
 
-  const playerStatsSql = `
-    SELECT p.id, p.name, p.active, p.created_at,
-      COUNT(g.id)::int AS played,
-      COALESCE(SUM(CASE WHEN g.status = 'terminada' AND g.winner_side_id = gp.side_id THEN 1 ELSE 0 END), 0)::int AS wins,
-      COALESCE(SUM(CASE WHEN g.status = 'terminada' AND g.winner_side_id <> gp.side_id THEN 1 ELSE 0 END), 0)::int AS losses,
-      COALESCE(SUM(CASE WHEN g.status = 'pendiente' THEN 1 ELSE 0 END), 0)::int AS pending,
-      COALESCE(SUM(CASE WHEN g.status = 'cancelada' THEN 1 ELSE 0 END), 0)::int AS cancelled,
-      COALESCE(SUM(hp.pts), 0)::int AS points
-    FROM domino.players p
-    LEFT JOIN domino.game_players gp ON gp.player_id = p.id
-    LEFT JOIN domino.games g ON g.id = gp.game_id AND g.practice = 0
-    LEFT JOIN (SELECT game_id, side_id, SUM(points) AS pts FROM domino.hands GROUP BY game_id, side_id) hp
-      ON hp.game_id = gp.game_id AND hp.side_id = gp.side_id`;
+  /**
+   * Un resultado de torneo no se puede cambiar si el enfrentamiento siguiente del cuadro ya tiene
+   * una partida iniciada (misma regla que en la app: mobile/src/domain/tournament.ts).
+   */
+  async function assertTournamentResultEditable(t, game) {
+    if (!game.tournamentId || !game.matchId) return;
+    const row = await t.get('SELECT data_json FROM domino.tournaments WHERE id = $1', [game.tournamentId]);
+    if (!row) return;
+    const nextId = nextMatchId(JSON.parse(row.data_json).rounds, game.matchId);
+    if (!nextId) return;
+    const started = await t.get(
+      "SELECT 1 AS x FROM domino.games WHERE tournament_id = $1 AND match_id = $2 AND status <> 'cancelada' AND deleted_at IS NULL",
+      [game.tournamentId, nextId],
+    );
+    if (started) {
+      throw new HttpError(409, 'Este resultado ya no se puede cambiar: el siguiente enfrentamiento del torneo ya empezó.');
+    }
+  }
 
-  function withPct(row) {
-    const decided = row.wins + row.losses;
-    return {
-      id: row.id,
-      name: row.name,
-      active: !!row.active,
-      createdAt: row.created_at,
-      played: row.played,
-      wins: row.wins,
-      losses: row.losses,
-      pending: row.pending,
-      cancelled: row.cancelled,
-      points: row.points,
-      winRate: decided ? Math.round((row.wins / decided) * 1000) / 10 : 0,
-    };
+  /** Ejecuta un cambio administrativo sobre una partida con la fila bloqueada durante la transacción. */
+  async function withLockedGame(id, fn, { allowDeleted = false } = {}) {
+    return db.tx(async (t) => {
+      await t.get('SELECT id FROM domino.games WHERE id = $1 FOR UPDATE', [id]);
+      const game = await requireGame(t, id);
+      if (game.deletedAt && !allowDeleted) throw new HttpError(409, 'La partida está en la papelera. Restáurala antes de modificarla.');
+      await assertTournamentResultEditable(t, game);
+      return fn(t, game);
+    });
   }
 
   // ---------- Públicas ----------
   app.get('/api/health', (req, res) => res.json({ ok: true, time: now() }));
 
+  /** Valores predeterminados, identidad visual y tema: públicos (no contienen datos privados). */
+  app.get('/api/public/config', async (req, res) => res.json(await getPublicConfig(db)));
+
   app.post('/api/auth/login', async (req, res) => {
-    const username = typeof req.body?.username === 'string' ? req.body.username.trim() : '';
+    const login = String(req.body?.email ?? req.body?.username ?? '').trim();
     const password = typeof req.body?.password === 'string' ? req.body.password : '';
-    if (!username || !password) throw bad('Ingresa usuario y contraseña.');
-    if (limiter.isBlocked(req, username)) {
+    if (!login || !password) throw bad('Ingresa tu correo (o usuario) y contraseña.');
+    if (limiter.isBlocked(req, login)) {
       return res.status(429).json({ error: 'Demasiados intentos fallidos. Espera 15 minutos e inténtalo de nuevo.' });
     }
-    const user = await userByName(db, username);
+    const user = await userByLogin(db, login);
     const valid = verifyPassword(password, user?.password_hash ?? null);
     if (!user || !valid || !user.active) {
-      limiter.fail(req, username);
+      limiter.fail(req, login);
       return res.status(401).json({ error: 'Usuario o contraseña incorrectos.' });
     }
-    limiter.reset(req, username);
+    limiter.reset(req, login);
     res.json({ token: signToken(user, jwtSecret, jwtExpiresIn), user: publicUser(user) });
+  });
+
+  app.get('/api/auth/recovery', (req, res) => res.json({ emailConfigured: mailer.configured }));
+
+  // La respuesta es siempre la misma, exista o no la cuenta, para no revelar qué correos están registrados.
+  app.post('/api/auth/forgot', async (req, res) => {
+    const generic = {
+      message: mailer.configured
+        ? 'Si el correo corresponde a una cuenta activa, recibirás un enlace para restablecer la contraseña.'
+        : 'La recuperación por correo no está configurada en el servidor. Pide al propietario que restablezca tu contraseña.',
+      emailConfigured: mailer.configured,
+    };
+    const email = typeof req.body?.email === 'string' ? req.body.email.trim().toLowerCase() : '';
+    if (!EMAIL_RE.test(email)) throw bad('Escribe un correo válido.');
+    if (!mailer.configured) return res.json(generic);
+    if (recoveryLimiter.isBlocked(req, email)) return res.json(generic);
+    recoveryLimiter.fail(req, email);
+    const user = await db.get('SELECT * FROM domino.users WHERE lower(email) = $1 AND active = 1', [email]);
+    if (user) {
+      const token = randomBytes(32).toString('base64url');
+      const created = now();
+      await db.run(
+        'INSERT INTO domino.password_resets (user_id, token_hash, created_at, expires_at) VALUES ($1, $2, $3, $4)',
+        [user.id, sha256(token), created, new Date(Date.now() + RESET_TTL_MS).toISOString()],
+      );
+      try {
+        await mailer.send({
+          to: user.email,
+          subject: 'Restablecer tu contraseña',
+          text: `Para elegir una contraseña nueva abre este enlace (vence en 30 minutos y solo sirve una vez):\n\n${mailer.appUrl}/admin/restablecer?token=${token}\n\nSi no lo pediste, ignora este correo.`,
+        });
+      } catch (err) {
+        console.error('No se pudo enviar el correo de recuperación:', err.message);
+      }
+    }
+    res.json(generic);
+  });
+
+  app.post('/api/auth/reset', async (req, res) => {
+    const token = typeof req.body?.token === 'string' ? req.body.token.trim() : '';
+    if (!/^[A-Za-z0-9_-]{20,100}$/.test(token)) throw bad('El enlace no es válido.');
+    const weak = validatePasswordStrength(req.body?.password);
+    if (weak) throw bad(weak);
+    await db.tx(async (t) => {
+      const row = await t.get('SELECT * FROM domino.password_resets WHERE token_hash = $1 FOR UPDATE', [sha256(token)]);
+      if (!row || row.used_at || Date.parse(row.expires_at) < Date.now()) {
+        throw bad('El enlace venció o ya se usó. Pide uno nuevo.');
+      }
+      await t.run('UPDATE domino.password_resets SET used_at = $1 WHERE id = $2', [now(), row.id]);
+      // Cambiar token_version cierra todas las sesiones abiertas de la cuenta.
+      await t.run('UPDATE domino.users SET password_hash = $1, token_version = token_version + 1 WHERE id = $2', [
+        hashPassword(req.body.password),
+        row.user_id,
+      ]);
+    });
+    res.json({ ok: true });
   });
 
   // ---------- Usuario autenticado (anotador o administrador) ----------
   app.get('/api/auth/me', auth, (req, res) => res.json({ user: publicUser(req.user) }));
+
+  /** Cierra todas las sesiones de la cuenta (en todos los dispositivos). */
+  app.post('/api/auth/logout-all', auth, async (req, res) => {
+    await db.run('UPDATE domino.users SET token_version = token_version + 1 WHERE id = $1', [req.user.id]);
+    res.status(204).end();
+  });
 
   app.get('/api/settings', auth, async (req, res) => res.json({ settings: await getSettings(db) }));
 
@@ -442,11 +548,15 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
     if (!Array.isArray(incoming) || incoming.length > 200) throw bad('Envía entre 0 y 200 partidas.');
     const incomingTournaments = req.body?.tournaments ?? [];
     if (!Array.isArray(incomingTournaments) || incomingTournaments.length > 100) throw bad('Envía como máximo 100 torneos.');
+    const isAdmin = isAdminRole(req.user.role);
+    // Solo el dueño (la cuenta que la registró) modifica su partida o torneo; los administradores, cualquiera.
+    const canEdit = (ownerId) => isAdmin || ownerId == null || ownerId === req.user.id;
     const accepted = [];
     const serverVersionIds = [];
     const deleted = [];
     const errors = [];
     const acceptedTournaments = [];
+    const serverTournamentIds = [];
     for (const raw of incomingTournaments) {
       let tour;
       try {
@@ -455,12 +565,14 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
         errors.push({ id: typeof raw?.id === 'string' ? raw.id.slice(0, 64) : null, error: err.message });
         continue;
       }
-      const revision = await db.tx(async (t) => {
-        const existing = await t.get('SELECT revision FROM domino.tournaments WHERE id = $1 FOR UPDATE', [tour.id]);
-        if (existing && existing.revision >= tour.revision) return existing.revision;
+      const outcome = await db.tx(async (t) => {
+        const existing = await t.get('SELECT revision, admin_revision, source_user_id FROM domino.tournaments WHERE id = $1 FOR UPDATE', [tour.id]);
+        if (existing && !canEdit(existing.source_user_id)) return 'forbidden';
+        if (existing && existing.admin_revision > 0 && tour.adminRevision !== existing.admin_revision) return 'server';
+        if (existing && existing.revision >= tour.revision) return { revision: existing.revision };
         await t.run(
-          `INSERT INTO domino.tournaments (id, name, mode, target, status, data_json, created_at, updated_at, revision, source_user_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          `INSERT INTO domino.tournaments (id, name, mode, target, status, data_json, created_at, updated_at, revision, source_user_id, admin_revision)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0)
            ON CONFLICT (id) DO UPDATE SET name = excluded.name, status = excluded.status, data_json = excluded.data_json,
              updated_at = excluded.updated_at, revision = excluded.revision`,
           [
@@ -476,9 +588,11 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
             req.user.id,
           ],
         );
-        return tour.revision;
+        return { revision: tour.revision };
       });
-      acceptedTournaments.push({ id: tour.id, revision });
+      if (outcome === 'forbidden') errors.push({ id: tour.id, error: 'No puedes modificar un torneo organizado por otra cuenta.' });
+      else if (outcome === 'server') serverTournamentIds.push(tour.id);
+      else acceptedTournaments.push({ id: tour.id, revision: outcome.revision });
     }
     for (const raw of incoming) {
       let game;
@@ -491,8 +605,17 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
       // Lectura y escritura en la misma transacción, con la fila bloqueada, para que dos
       // dispositivos que sincronizan a la vez no se pisen.
       const outcome = await db.tx(async (t) => {
-        if (await isDeleted(t, game.id)) return 'deleted';
-        const existing = await t.get('SELECT revision, admin_revision FROM domino.games WHERE id = $1 FOR UPDATE', [game.id]);
+        if (await t.get('SELECT 1 AS x FROM domino.deleted_games WHERE id = $1', [game.id])) return 'deleted';
+        const existing = await t.get(
+          'SELECT revision, admin_revision, source_user_id, deleted_at FROM domino.games WHERE id = $1 FOR UPDATE',
+          [game.id],
+        );
+        if (existing?.deleted_at) return 'deleted';
+        if (existing && !canEdit(existing.source_user_id)) return 'forbidden';
+        if (!existing && game.tournamentId && !isAdmin) {
+          const tour = await t.get('SELECT source_user_id FROM domino.tournaments WHERE id = $1', [game.tournamentId]);
+          if (tour && !canEdit(tour.source_user_id)) return 'forbidden';
+        }
         if (existing && existing.admin_revision > 0 && game.adminRevision !== existing.admin_revision) {
           // Un administrador corrigió esta partida y el dispositivo aún no tiene esa corrección:
           // el servidor manda y el dispositivo debe adoptar su versión.
@@ -500,20 +623,28 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
         }
         if (existing && existing.revision >= game.revision) return { revision: existing.revision };
         const normalized = recompute(game, game.hands, game.updatedAt);
-        await writeGame(t, normalized, { adminRevision: existing?.admin_revision ?? 0, sourceUserId: req.user.id });
+        await writeGame(t, normalized, {
+          adminRevision: existing?.admin_revision ?? 0,
+          sourceUserId: existing ? existing.source_user_id : req.user.id,
+        });
         return { revision: game.revision };
       });
       if (outcome === 'deleted') deleted.push(game.id);
       else if (outcome === 'server') serverVersionIds.push(game.id);
+      else if (outcome === 'forbidden') errors.push({ id: game.id, error: 'No puedes modificar una partida registrada por otra cuenta.' });
       else accepted.push({ id: game.id, revision: outcome.revision });
     }
 
     // Partidas que el dispositivo ya tenía sincronizadas: se le avisa si un administrador
-    // las corrigió o eliminó desde entonces.
+    // las corrigió, las envió a la papelera o las eliminó desde entonces.
     const known = (Array.isArray(req.body?.known) ? req.body.known.slice(0, 2000) : []).filter((k) => ID_RE.test(k?.id ?? ''));
     if (known.length) {
       const ids = known.map((k) => k.id);
-      const deletedRows = await db.all('SELECT id FROM domino.deleted_games WHERE id = ANY($1::text[])', [ids]);
+      const deletedRows = await db.all(
+        `SELECT id FROM domino.deleted_games WHERE id = ANY($1::text[])
+         UNION SELECT id FROM domino.games WHERE id = ANY($1::text[]) AND deleted_at IS NOT NULL`,
+        [ids],
+      );
       const deletedSet = new Set(deletedRows.map((r) => r.id));
       const revRows = await db.all('SELECT id, admin_revision FROM domino.games WHERE id = ANY($1::text[])', [ids]);
       const adminRev = new Map(revRows.map((r) => [r.id, r.admin_revision]));
@@ -527,8 +658,45 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
         if (current > 0 && current !== theirs) serverVersionIds.push(k.id);
       }
     }
+    // Partidas de esta cuenta que un administrador corrigió o restauró de la papelera y que el
+    // dispositivo no tiene (no las envió ni figuran entre las conocidas): se le entregan.
+    if (req.body?.pull === true) {
+      const have = [...known.map((k) => k.id), ...incoming.map((g) => g?.id).filter((id) => typeof id === 'string')];
+      const missing = await db.all(
+        `SELECT id FROM domino.games WHERE source_user_id = $1 AND admin_revision > 0 AND deleted_at IS NULL
+           AND NOT (id = ANY($2::text[])) ORDER BY updated_at DESC LIMIT 200`,
+        [req.user.id, have],
+      );
+      serverVersionIds.push(...missing.map((r) => r.id));
+    }
+
+    // Torneos: correcciones administrativas (pausa, participantes, cancelación) y torneos creados
+    // desde el panel para esta cuenta.
+    const knownTournaments = (Array.isArray(req.body?.knownTournaments) ? req.body.knownTournaments.slice(0, 500) : []).filter((k) =>
+      ID_RE.test(k?.id ?? ''),
+    );
+    if (knownTournaments.length) {
+      const rows = await db.all('SELECT id, admin_revision FROM domino.tournaments WHERE id = ANY($1::text[])', [knownTournaments.map((k) => k.id)]);
+      const rev = new Map(rows.map((r) => [r.id, r.admin_revision]));
+      for (const k of knownTournaments) {
+        const current = rev.get(k.id) ?? 0;
+        if (current > 0 && current !== (Number.isInteger(k.adminRevision) ? k.adminRevision : 0)) serverTournamentIds.push(k.id);
+      }
+    }
+    if (req.body?.pull === true) {
+      const have = [...knownTournaments.map((k) => k.id), ...incomingTournaments.map((x) => x?.id).filter((id) => typeof id === 'string')];
+      const missing = await db.all(
+        'SELECT id FROM domino.tournaments WHERE source_user_id = $1 AND admin_revision > 0 AND NOT (id = ANY($2::text[])) LIMIT 100',
+        [req.user.id, have],
+      );
+      serverTournamentIds.push(...missing.map((r) => r.id));
+    }
     const serverVersions = await loadGames(db, [...new Set(serverVersionIds)]);
-    res.json({ accepted, serverVersions, deleted, errors, acceptedTournaments });
+    const tIds = [...new Set(serverTournamentIds)];
+    const serverTournaments = tIds.length
+      ? (await db.all('SELECT * FROM domino.tournaments WHERE id = ANY($1::text[])', [tIds])).map(rowToTournament)
+      : [];
+    res.json({ accepted, serverVersions, deleted, errors, acceptedTournaments, serverTournaments });
   });
 
   // ---------- Conteo de fichas con cámara ----------
@@ -568,409 +736,27 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
     }
   });
 
-  // ---------- Administración ----------
+  // ---------- Administración (solo propietario y administradores, verificado en cada petición) ----------
   const admin = express.Router();
-  admin.use(...adminOnly);
-
-  admin.get('/summary', async (req, res) => {
-    const c = await db.get(`
-      SELECT
-        (SELECT COUNT(*) FROM domino.players)::int AS players,
-        (SELECT COUNT(*) FROM domino.players WHERE active = 1)::int AS active_players,
-        (SELECT COUNT(*) FROM domino.games)::int AS games,
-        (SELECT COUNT(*) FROM domino.games WHERE status = 'pendiente')::int AS active,
-        (SELECT COUNT(*) FROM domino.games WHERE status = 'terminada')::int AS finished,
-        (SELECT COUNT(*) FROM domino.games WHERE status = 'cancelada')::int AS cancelled,
-        (SELECT COUNT(*) FROM domino.corrections)::int AS corrections`);
-    const recent = await db.all('SELECT id FROM domino.games ORDER BY updated_at DESC LIMIT 5');
-    res.json({
-      players: c.players,
-      activePlayers: c.active_players,
-      games: c.games,
-      active: c.active,
-      finished: c.finished,
-      cancelled: c.cancelled,
-      corrections: c.corrections,
-      recentGames: await loadGames(db, recent.map((r) => r.id)),
-    });
+  admin.use(auth, requireRole(...ADMIN_ROLES));
+  registerAdminRoutes(admin, {
+    db,
+    now,
+    toId,
+    userById,
+    userByLogin,
+    playerByName,
+    playerById,
+    logCorrection,
+    loadGames,
+    loadGame,
+    requireGame,
+    rowToTournament,
+    ensurePlayer,
+    writeGame,
+    saveAdminChange,
+    withLockedGame,
   });
-
-  // Jugadores
-  admin.get('/players', async (req, res) => {
-    const rows = await db.all(`${playerStatsSql} GROUP BY p.id ORDER BY lower(p.name)`);
-    res.json({ players: rows.map(withPct) });
-  });
-
-  admin.get('/players/:id', async (req, res) => {
-    const id = toId(req.params.id);
-    const row = id && (await db.get(`${playerStatsSql} WHERE p.id = $1 GROUP BY p.id`, [id]));
-    if (!row) throw notFound('El jugador no existe.');
-    const ids = await db.all(
-      `SELECT g.id FROM domino.game_players gp JOIN domino.games g ON g.id = gp.game_id
-       WHERE gp.player_id = $1 ORDER BY g.created_at DESC LIMIT 100`,
-      [row.id],
-    );
-    res.json({ player: withPct(row), games: await loadGames(db, ids.map((r) => r.id)) });
-  });
-
-  admin.post('/players', async (req, res) => {
-    const name = cleanName(req.body?.name);
-    if (await playerByName(db, name)) throw new HttpError(409, 'Ya existe un jugador con ese nombre.');
-    const id = await db.tx(async (t) => {
-      const created = await t.get(
-        'INSERT INTO domino.players (name, active, created_at) VALUES ($1, 1, $2) RETURNING id',
-        [name, now()],
-      );
-      await logCorrection(t, req, { entity: 'jugador', entityId: created.id, action: 'crear', reason: 'Alta de jugador', after: { name } });
-      return created.id;
-    });
-    res.status(201).json({ player: { id, name, active: true } });
-  });
-
-  admin.patch('/players/:id', async (req, res) => {
-    const reason = requireReason(req.body);
-    const id = toId(req.params.id);
-    const player = id && (await playerById(db, id));
-    if (!player) throw notFound('El jugador no existe.');
-    const after = { name: player.name, active: !!player.active };
-    if (req.body.name !== undefined) after.name = cleanName(req.body.name);
-    if (req.body.active !== undefined) {
-      if (typeof req.body.active !== 'boolean') throw bad('Estado de jugador inválido.');
-      after.active = req.body.active;
-    }
-    const clash = await playerByName(db, after.name);
-    if (clash && clash.id !== player.id) throw new HttpError(409, 'Ya existe un jugador con ese nombre.');
-    await db.tx(async (t) => {
-      await t.run('UPDATE domino.players SET name = $1, active = $2 WHERE id = $3', [after.name, after.active ? 1 : 0, player.id]);
-      if (after.name !== player.name) {
-        // Mantener coherentes los nombres guardados en las partidas.
-        const games = await t.all(
-          `SELECT g.* FROM domino.game_players gp JOIN domino.games g ON g.id = gp.game_id
-           WHERE gp.player_id = $1 FOR UPDATE OF g`,
-          [player.id],
-        );
-        const oldKey = player.name.toLowerCase();
-        for (const row of games) {
-          const participants = JSON.parse(row.participants_json).map((p) =>
-            p.name.toLowerCase() === oldKey ? { ...p, name: after.name } : p,
-          );
-          const sides = JSON.parse(row.sides_json);
-          const renamedSides =
-            row.mode === 'individual' ? sides.map((s) => (s.name.toLowerCase() === oldKey ? { ...s, name: after.name } : s)) : sides;
-          await t.run(
-            `UPDATE domino.games SET participants_json = $1, sides_json = $2, revision = revision + 1,
-                                     admin_revision = revision + 1, updated_at = $3 WHERE id = $4`,
-            [JSON.stringify(participants), JSON.stringify(renamedSides), now(), row.id],
-          );
-        }
-      }
-      await logCorrection(t, req, {
-        entity: 'jugador',
-        entityId: player.id,
-        action: 'editar',
-        reason,
-        before: { name: player.name, active: !!player.active },
-        after,
-      });
-    });
-    res.json({ player: { id: player.id, ...after } });
-  });
-
-  admin.delete('/players/:id', async (req, res) => {
-    const reason = requireReason(req.body);
-    const id = toId(req.params.id);
-    const player = id && (await playerById(db, id));
-    if (!player) throw notFound('El jugador no existe.');
-    const { n: used } = await db.get('SELECT COUNT(*)::int AS n FROM domino.game_players WHERE player_id = $1', [player.id]);
-    if (used > 0) {
-      throw new HttpError(
-        409,
-        `No se puede eliminar: participa en ${used} partida(s). Desactívalo para conservar el historial.`,
-      );
-    }
-    await db.tx(async (t) => {
-      await t.run('DELETE FROM domino.players WHERE id = $1', [player.id]);
-      await logCorrection(t, req, { entity: 'jugador', entityId: player.id, action: 'eliminar', reason, before: { name: player.name } });
-    });
-    res.status(204).end();
-  });
-
-  // Partidas
-  admin.get('/games', async (req, res) => {
-    const where = [];
-    const params = [];
-    const add = (sql, value) => {
-      params.push(value);
-      where.push(sql.replace('?', `$${params.length}`));
-    };
-    if (STATUSES.includes(req.query.status)) add('g.status = ?', req.query.status);
-    if (typeof req.query.player === 'string' && req.query.player.trim()) {
-      add(
-        `EXISTS (SELECT 1 FROM domino.game_players gp JOIN domino.players p ON p.id = gp.player_id
-                 WHERE gp.game_id = g.id AND p.name ILIKE ? ESCAPE '\\')`,
-        `%${req.query.player.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`,
-      );
-    }
-    if (typeof req.query.from === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from)) {
-      add('substr(g.created_at, 1, 10) >= ?', req.query.from);
-    }
-    if (typeof req.query.to === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to)) {
-      add('substr(g.created_at, 1, 10) <= ?', req.query.to);
-    }
-    const rows = await db.all(
-      `SELECT g.id FROM domino.games g ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-       ORDER BY g.created_at DESC LIMIT 300`,
-      params,
-    );
-    res.json({ games: await loadGames(db, rows.map((r) => r.id)) });
-  });
-
-  admin.get('/games/:id', async (req, res) => {
-    const game = await requireGame(db, req.params.id);
-    const corrections = (await db.all('SELECT * FROM domino.corrections WHERE game_id = $1 ORDER BY id DESC', [game.id])).map(
-      correctionRow,
-    );
-    res.json({ game, corrections });
-  });
-
-  /** Ejecuta un cambio administrativo sobre una partida con la fila bloqueada durante la transacción. */
-  async function withLockedGame(id, fn) {
-    return db.tx(async (t) => {
-      await t.get('SELECT id FROM domino.games WHERE id = $1 FOR UPDATE', [id]);
-      const game = await requireGame(t, id);
-      await assertTournamentResultEditable(t, game);
-      return fn(t, game);
-    });
-  }
-
-  /**
-   * Un resultado de torneo no se puede cambiar si el enfrentamiento siguiente del cuadro ya tiene
-   * una partida iniciada (misma regla que en la app: mobile/src/domain/tournament.ts).
-   */
-  async function assertTournamentResultEditable(t, game) {
-    if (!game.tournamentId || !game.matchId) return;
-    const row = await t.get('SELECT data_json FROM domino.tournaments WHERE id = $1', [game.tournamentId]);
-    if (!row) return;
-    const nextId = nextMatchId(JSON.parse(row.data_json).rounds, game.matchId);
-    if (!nextId) return;
-    const started = await t.get(
-      "SELECT 1 AS x FROM domino.games WHERE tournament_id = $1 AND match_id = $2 AND status <> 'cancelada'",
-      [game.tournamentId, nextId],
-    );
-    if (started) {
-      throw new HttpError(409, 'Este resultado ya no se puede cambiar: el siguiente enfrentamiento del torneo ya empezó.');
-    }
-  }
-
-  admin.patch('/games/:id/hands/:handId', async (req, res) => {
-    const reason = requireReason(req.body);
-    const points = req.body?.points;
-    if (!isNonNegativeInt(points, MAX_HAND_POINTS)) {
-      throw bad(`Los puntos deben ser un número entero entre 0 y ${MAX_HAND_POINTS}.`);
-    }
-    const id = await withLockedGame(req.params.id, async (t, game) => {
-      const hand = game.hands.find((h) => h.id === req.params.handId);
-      if (!hand) throw notFound('La mano no existe.');
-      const result = await saveAdminChange(t, {
-        ...game,
-        hands: game.hands.map((h) => (h.id === hand.id ? { ...h, points, editedAt: now() } : h)),
-      });
-      await logCorrection(t, req, {
-        entity: 'mano',
-        entityId: hand.id,
-        gameId: game.id,
-        action: 'editar',
-        reason,
-        before: { points: hand.points, status: game.status, winnerSideId: game.winnerSideId },
-        after: { points, status: result.status, winnerSideId: result.winnerSideId },
-      });
-      return game.id;
-    });
-    res.json({ game: await loadGame(db, id) });
-  });
-
-  admin.delete('/games/:id/hands/:handId', async (req, res) => {
-    const reason = requireReason(req.body);
-    const id = await withLockedGame(req.params.id, async (t, game) => {
-      const hand = game.hands.find((h) => h.id === req.params.handId);
-      if (!hand) throw notFound('La mano no existe.');
-      const result = await saveAdminChange(t, { ...game, hands: game.hands.filter((h) => h.id !== hand.id) });
-      await logCorrection(t, req, {
-        entity: 'mano',
-        entityId: hand.id,
-        gameId: game.id,
-        action: 'eliminar',
-        reason,
-        before: { sideId: hand.sideId, points: hand.points, status: game.status },
-        after: { status: result.status, winnerSideId: result.winnerSideId },
-      });
-      return game.id;
-    });
-    res.json({ game: await loadGame(db, id) });
-  });
-
-  admin.patch('/games/:id', async (req, res) => {
-    const reason = requireReason(req.body);
-    const status = req.body?.status;
-    if (status !== 'cancelada' && status !== 'pendiente') {
-      throw bad('Solo puedes cancelar una partida o reabrirla.');
-    }
-    const id = await withLockedGame(req.params.id, async (t, game) => {
-      if (status === game.status) throw bad('La partida ya tiene ese estado.');
-      // Reabrir recalcula el estado real (si alguien ya alcanzó la meta, vuelve a quedar terminada).
-      const result = await saveAdminChange(t, { ...game, status });
-      await logCorrection(t, req, {
-        entity: 'partida',
-        entityId: game.id,
-        gameId: game.id,
-        action: status === 'cancelada' ? 'cancelar' : 'reabrir',
-        reason,
-        before: { status: game.status },
-        after: { status: result.status },
-      });
-      return game.id;
-    });
-    res.json({ game: await loadGame(db, id) });
-  });
-
-  admin.delete('/games/:id', async (req, res) => {
-    const reason = requireReason(req.body);
-    await withLockedGame(req.params.id, async (t, game) => {
-      await t.run('DELETE FROM domino.games WHERE id = $1', [game.id]);
-      await t.run(
-        'INSERT INTO domino.deleted_games (id, deleted_at) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET deleted_at = excluded.deleted_at',
-        [game.id, now()],
-      );
-      await logCorrection(t, req, { entity: 'partida', entityId: game.id, gameId: game.id, action: 'eliminar', reason, before: game });
-    });
-    res.status(204).end();
-  });
-
-  admin.get('/ranking', async (req, res) => {
-    const rows = (await db.all(`${playerStatsSql} GROUP BY p.id HAVING COUNT(g.id) > 0`)).map(withPct);
-    rows.sort((a, b) => b.wins - a.wins || b.winRate - a.winRate || a.losses - b.losses || a.name.localeCompare(b.name));
-    res.json({ ranking: rows.map((r, i) => ({ position: i + 1, ...r })) });
-  });
-
-  function correctionRow(r) {
-    return {
-      id: r.id,
-      createdAt: r.created_at,
-      adminUsername: r.admin_username,
-      entity: r.entity,
-      entityId: r.entity_id,
-      gameId: r.game_id,
-      action: r.action,
-      reason: r.reason,
-      before: r.before_json ? JSON.parse(r.before_json) : null,
-      after: r.after_json ? JSON.parse(r.after_json) : null,
-    };
-  }
-
-  admin.get('/corrections', async (req, res) => {
-    const rows = await db.all('SELECT * FROM domino.corrections ORDER BY id DESC LIMIT 500');
-    res.json({ corrections: rows.map(correctionRow) });
-  });
-
-  admin.get('/settings', async (req, res) => res.json({ settings: await getSettings(db) }));
-
-  admin.put('/settings', async (req, res) => {
-    const body = req.body ?? {};
-    const targets = body.defaultTargets;
-    if (
-      !Array.isArray(targets) ||
-      targets.length < 1 ||
-      targets.length > 8 ||
-      targets.some((t) => !Number.isInteger(t) || t < 1 || t > MAX_TARGET)
-    ) {
-      throw bad(`Las metas deben ser entre 1 y 8 números enteros entre 1 y ${MAX_TARGET}.`);
-    }
-    const uniqueTargets = [...new Set(targets)].sort((a, b) => a - b);
-    const defaultTarget = body.defaultTarget;
-    if (!uniqueTargets.includes(defaultTarget)) throw bad('La meta predeterminada debe estar en la lista de metas.');
-    const modes = body.modes ?? {};
-    if (typeof modes.individual !== 'boolean' || typeof modes.parejas !== 'boolean') throw bad('Modalidades inválidas.');
-    if (!modes.individual && !modes.parejas) throw bad('Debe haber al menos una modalidad habilitada.');
-    const settings = { ...DEFAULT_SETTINGS, defaultTargets: uniqueTargets, defaultTarget, modes };
-    await db.tx(async (t) => {
-      const before = await getSettings(t);
-      await saveSettings(t, settings);
-      await logCorrection(t, req, {
-        entity: 'configuracion',
-        entityId: 'juego',
-        action: 'editar',
-        reason: typeof body.reason === 'string' && body.reason.trim() ? body.reason.trim().slice(0, 500) : 'Actualización de configuración',
-        before,
-        after: settings,
-      });
-    });
-    res.json({ settings });
-  });
-
-  // Usuarios del sistema
-  admin.get('/users', async (req, res) => {
-    res.json({ users: (await db.all('SELECT * FROM domino.users ORDER BY lower(username)')).map(publicUser) });
-  });
-
-  admin.post('/users', async (req, res) => {
-    const username = cleanName(req.body?.username, 'El usuario');
-    const role = req.body?.role;
-    if (role !== 'admin' && role !== 'anotador') throw bad('Rol inválido.');
-    const weak = validatePasswordStrength(req.body?.password);
-    if (weak) throw bad(weak);
-    if (await userByName(db, username)) throw new HttpError(409, 'Ese usuario ya existe.');
-    const user = await db.tx(async (t) => {
-      const created = await t.get(
-        'INSERT INTO domino.users (username, password_hash, role, active, created_at) VALUES ($1, $2, $3, 1, $4) RETURNING *',
-        [username, hashPassword(req.body.password), role, now()],
-      );
-      await logCorrection(t, req, { entity: 'usuario', entityId: created.id, action: 'crear', reason: 'Alta de usuario', after: publicUser(created) });
-      return created;
-    });
-    res.status(201).json({ user: publicUser(user) });
-  });
-
-  admin.patch('/users/:id', async (req, res) => {
-    const reason = requireReason(req.body);
-    const id = toId(req.params.id);
-    const user = id && (await userById(db, id));
-    if (!user) throw notFound('El usuario no existe.');
-    const isSelf = user.id === req.user.id;
-    let { role, active, password_hash } = user;
-    if (req.body.role !== undefined) {
-      if (req.body.role !== 'admin' && req.body.role !== 'anotador') throw bad('Rol inválido.');
-      if (isSelf && req.body.role !== 'admin') throw bad('No puedes quitarte tu propio rol de administrador.');
-      role = req.body.role;
-    }
-    if (req.body.active !== undefined) {
-      if (typeof req.body.active !== 'boolean') throw bad('Estado inválido.');
-      if (isSelf && !req.body.active) throw bad('No puedes desactivar tu propio usuario.');
-      active = req.body.active ? 1 : 0;
-    }
-    if (req.body.password !== undefined) {
-      const weak = validatePasswordStrength(req.body.password);
-      if (weak) throw bad(weak);
-      password_hash = hashPassword(req.body.password);
-    }
-    const updated = await db.tx(async (t) => {
-      const row = await t.get(
-        `UPDATE domino.users SET role = $1, active = $2, password_hash = $3, token_version = token_version + 1
-         WHERE id = $4 RETURNING *`,
-        [role, active, password_hash, user.id],
-      );
-      await logCorrection(t, req, {
-        entity: 'usuario',
-        entityId: user.id,
-        action: 'editar',
-        reason,
-        before: publicUser(user),
-        after: { ...publicUser(row), passwordChanged: req.body.password !== undefined },
-      });
-      return row;
-    });
-    res.json({ user: publicUser(updated) });
-  });
-
   app.use('/api/admin', admin);
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
@@ -978,6 +764,7 @@ export function createApp({ db, jwtSecret, jwtExpiresIn = '12h', corsOrigins = [
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, next) => {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.message });
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err?.type === 'entity.parse.failed') return res.status(400).json({ error: 'El cuerpo de la petición no es JSON válido.' });
     if (err?.type === 'entity.too.large') return res.status(413).json({ error: 'La petición es demasiado grande.' });
     console.error(err);

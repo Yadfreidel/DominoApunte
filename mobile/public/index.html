@@ -16,6 +16,7 @@
     <meta name="apple-mobile-web-app-title" content="Dominó" />
     <meta name="application-name" content="Dominó" />
     <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#050a24" />
     <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
     <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
 
@@ -45,7 +46,58 @@
         -webkit-tap-highlight-color: transparent;
         overscroll-behavior: none;
       }
+      /* Foco visible para teclado en toda la app (no depende solo del color: contorno grueso). */
+      :focus-visible {
+        outline: 3px solid var(--domino-focus, #c6f432);
+        outline-offset: 2px;
+      }
+      /* Transiciones suaves de color al pasar el cursor o cambiar de estado. */
+      [role='button'],
+      [role='tab'],
+      [role='link'],
+      [role='menuitem'],
+      [role='radio'],
+      [role='checkbox'],
+      [role='switch'],
+      input,
+      textarea {
+        transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, opacity 0.18s ease;
+      }
+      @media (hover: hover) {
+        [role='button']:hover,
+        [role='tab']:hover,
+        [role='menuitem']:hover {
+          filter: brightness(1.12);
+        }
+      }
+      /* Respeta la preferencia del sistema de reducir el movimiento. */
+      @media (prefers-reduced-motion: reduce) {
+        *,
+        *::before,
+        *::after {
+          transition-duration: 0.01ms !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          scroll-behavior: auto !important;
+        }
+      }
     </style>
+    <!-- Tema global guardado: se aplica al fondo antes de cargar la app para evitar destellos. -->
+    <script>
+      try {
+        var t = JSON.parse(localStorage.getItem('domino:appearance') || 'null');
+        var hex = /^#[0-9A-Fa-f]{6}$/;
+        if (t && t.colors && hex.test(t.colors.background) && hex.test(t.colors.primary)) {
+          document.documentElement.style.backgroundColor = t.colors.background;
+          document.documentElement.style.setProperty('--domino-focus', t.colors.primary);
+          var bg = document.createElement('style');
+          bg.textContent = 'html,body{background-color:' + t.colors.background + '}';
+          document.head.appendChild(bg);
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', t.colors.background);
+        }
+      } catch (e) {}
+    </script>
   </head>
 
   <body>

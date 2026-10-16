@@ -62,8 +62,9 @@ export default function TournamentDetail() {
     toast('Torneo cancelado', 'info');
   };
 
+  const paused = t.status === 'pausado' && resolved.status === 'en_curso';
   const statusText =
-    resolved.status === 'terminado' ? 'Terminado' : resolved.status === 'cancelado' ? 'Cancelado' : 'En curso';
+    resolved.status === 'terminado' ? 'Terminado' : resolved.status === 'cancelado' ? 'Cancelado' : paused ? 'En pausa' : 'En curso';
 
   return (
     <Screen header={<AppHeader subtitle={t.name} />} maxWidth={1240}>
@@ -75,6 +76,13 @@ export default function TournamentDetail() {
           {statusText}
         </Text>
       </Card>
+
+      {paused ? (
+        <Card accent={colors.warning} style={s.pausedCard}>
+          <Ionicons name="pause-circle" size={26} color={colors.warning} />
+          <Text style={s.pausedText}>Torneo en pausa: el organizador debe reanudarlo para empezar nuevos enfrentamientos.</Text>
+        </Card>
+      ) : null}
 
       {resolved.champion ? (
         <Card accent={colors.warning} style={s.champion}>
@@ -96,7 +104,7 @@ export default function TournamentDetail() {
                   key={m.id}
                   match={m}
                   locked={m.game ? !!lockReason(t, store.games, m.game) : false}
-                  disabled={resolved.status === 'cancelado'}
+                  disabled={resolved.status === 'cancelado' || paused}
                   onPlay={() => setStarting(m)}
                   onOpen={() => openGame(m)}
                   onView={() => m.game && router.push({ pathname: '/historial/[id]', params: { id: m.game.id } })}
@@ -223,6 +231,8 @@ function StartMatch({ match, onClose, onStart }: { match: ResolvedMatch; onClose
 }
 
 const s = StyleSheet.create({
+  pausedCard: { flexDirection: 'row', alignItems: 'center', gap: space.md },
+  pausedText: { color: colors.text, fontSize: 15, flex: 1 },
   title: { color: colors.text, fontFamily: fonts.heading, fontSize: 24 },
   meta: { color: colors.textMuted, fontSize: 14 },
   champion: { alignItems: 'center', gap: 4 },

@@ -9,6 +9,8 @@ export const APP_NAME = 'Dominó';
 export interface SummaryOptions {
   /** Texto adicional bajo el título, p. ej. "Torneo Verano · Semifinal". */
   context?: string;
+  /** Nombre de la app (identidad visual definida por el administrador). */
+  appName?: string;
   /** Fecha/hora en que se genera (para el pie). */
   generatedAt?: string;
   locale?: string;
@@ -31,6 +33,7 @@ const fit = (s: string, max: number) => (s.length > max ? `${s.slice(0, max - 1)
 
 export function buildSummarySvg(game: Game, options: SummaryOptions = {}): { svg: string; width: number; height: number } {
   const locale = options.locale ?? 'es';
+  const appName = options.appName?.trim() || APP_NAME;
   const W = 1080;
   const pad = 64;
   const t = totals(game);
@@ -44,7 +47,7 @@ export function buildSummarySvg(game: Game, options: SummaryOptions = {}): { svg
 
   // Encabezado
   y += 110;
-  parts.push(`<text x="${W / 2}" y="${y}" text-anchor="middle" font-family="${FONT}" font-size="84" fill="#F4F6FF" letter-spacing="6">${esc(APP_NAME.toUpperCase())}</text>`);
+  parts.push(`<text x="${W / 2}" y="${y}" text-anchor="middle" font-family="${FONT}" font-size="84" fill="${colors.title}" letter-spacing="6">${esc(appName.toUpperCase())}</text>`);
   y += 52;
   const subtitle = options.context ? `Resumen de partida · ${options.context}` : 'Resumen de partida';
   parts.push(`<text x="${W / 2}" y="${y}" text-anchor="middle" font-family="${FONT_TEXT}" font-size="30" fill="${colors.textMuted}">${esc(fit(subtitle, 60))}</text>`);
@@ -58,10 +61,10 @@ export function buildSummarySvg(game: Game, options: SummaryOptions = {}): { svg
     const c = sideColor(game.sides.indexOf(winner)).main;
     parts.push(`<rect x="${pad}" y="${y}" width="${W - pad * 2}" height="120" rx="28" fill="${c}" fill-opacity="0.14" stroke="${c}" stroke-width="4"/>`);
     parts.push(`<text x="${W / 2}" y="${y + 48}" text-anchor="middle" font-family="${FONT_TEXT}" font-size="26" font-weight="700" fill="${c}" letter-spacing="4">GANADOR</text>`);
-    parts.push(`<text x="${W / 2}" y="${y + 96}" text-anchor="middle" font-family="${FONT}" font-size="44" fill="#FFFFFF">${esc(fit(winner.name, 34))}</text>`);
+    parts.push(`<text x="${W / 2}" y="${y + 96}" text-anchor="middle" font-family="${FONT}" font-size="44" fill="${colors.text}">${esc(fit(winner.name, 34))}</text>`);
   } else {
     const label = game.status === 'cancelada' ? 'Partida cancelada' : 'Partida sin terminar';
-    parts.push(`<rect x="${pad}" y="${y}" width="${W - pad * 2}" height="120" rx="28" fill="#FFFFFF" fill-opacity="0.05" stroke="${colors.border}" stroke-width="3"/>`);
+    parts.push(`<rect x="${pad}" y="${y}" width="${W - pad * 2}" height="120" rx="28" fill="${colors.text}" fill-opacity="0.05" stroke="${colors.border}" stroke-width="3"/>`);
     parts.push(`<text x="${W / 2}" y="${y + 74}" text-anchor="middle" font-family="${FONT}" font-size="40" fill="${colors.textMuted}">${label}</text>`);
   }
   y += 120;
@@ -77,7 +80,7 @@ export function buildSummarySvg(game: Game, options: SummaryOptions = {}): { svg
     parts.push(`<rect x="${x}" y="${y}" width="${w}" height="${cardH}" rx="26" fill="${colors.surfaceSolid}" stroke="${c}" stroke-opacity="${isWinner ? 1 : 0.45}" stroke-width="${isWinner ? 5 : 3}"/>`);
     const cx = x + w / 2;
     const nameSize = n > 2 ? 28 : 36;
-    parts.push(`<text x="${cx}" y="${y + 58}" text-anchor="middle" font-family="${FONT_TEXT}" font-size="${nameSize}" font-weight="700" fill="#FFFFFF">${esc(fit(side.name, n > 2 ? 14 : 22))}</text>`);
+    parts.push(`<text x="${cx}" y="${y + 58}" text-anchor="middle" font-family="${FONT_TEXT}" font-size="${nameSize}" font-weight="700" fill="${colors.text}">${esc(fit(side.name, n > 2 ? 14 : 22))}</text>`);
     let scoreY = y + 180;
     if (game.mode === 'parejas' && sideLabel(game, side) !== side.name) {
       parts.push(`<text x="${cx}" y="${y + 96}" text-anchor="middle" font-family="${FONT_TEXT}" font-size="24" fill="${colors.textMuted}">${esc(fit(sideLabel(game, side), 30))}</text>`);
@@ -99,9 +102,9 @@ export function buildSummarySvg(game: Game, options: SummaryOptions = {}): { svg
   const rowH = 46;
   const numW = 120;
   const handColW = (W - pad * 2 - numW) / n;
-  parts.push(`<text x="${pad}" y="${y}" font-family="${FONT_TEXT}" font-size="30" font-weight="700" fill="#FFFFFF">Puntos por mano</text>`);
+  parts.push(`<text x="${pad}" y="${y}" font-family="${FONT_TEXT}" font-size="30" font-weight="700" fill="${colors.text}">Puntos por mano</text>`);
   y += 26;
-  parts.push(`<rect x="${pad}" y="${y}" width="${W - pad * 2}" height="${rowH}" rx="12" fill="#FFFFFF" fill-opacity="0.05"/>`);
+  parts.push(`<rect x="${pad}" y="${y}" width="${W - pad * 2}" height="${rowH}" rx="12" fill="${colors.text}" fill-opacity="0.05"/>`);
   parts.push(`<text x="${pad + 24}" y="${y + 31}" font-family="${FONT_TEXT}" font-size="22" font-weight="700" fill="${colors.textDim}">MANO</text>`);
   game.sides.forEach((side, i) => {
     parts.push(`<text x="${pad + numW + handColW * i + handColW / 2}" y="${y + 31}" text-anchor="middle" font-family="${FONT_TEXT}" font-size="22" font-weight="700" fill="${sideColor(i).main}">${esc(fit(side.name.toUpperCase(), n > 2 ? 10 : 18))}</text>`);
@@ -114,7 +117,7 @@ export function buildSummarySvg(game: Game, options: SummaryOptions = {}): { svg
   game.hands.forEach((h, idx) => {
     const top = y;
     y += rowH;
-    parts.push(`<line x1="${pad}" y1="${y}" x2="${W - pad}" y2="${y}" stroke="#607CFF" stroke-opacity="0.35" stroke-width="2"/>`);
+    parts.push(`<line x1="${pad}" y1="${y}" x2="${W - pad}" y2="${y}" stroke="${colors.purple}" stroke-opacity="0.35" stroke-width="2"/>`);
     parts.push(`<text x="${pad + 24}" y="${top + 32}" font-family="${FONT_TEXT}" font-size="24" fill="${colors.textDim}">${idx + 1}</text>`);
     game.sides.forEach((side, i) => {
       const scored = h.sideId === side.id;
@@ -123,7 +126,7 @@ export function buildSummarySvg(game: Game, options: SummaryOptions = {}): { svg
   });
   // Totales
   y += 12;
-  parts.push(`<rect x="${pad}" y="${y}" width="${W - pad * 2}" height="${rowH + 6}" rx="12" fill="#FFFFFF" fill-opacity="0.07"/>`);
+  parts.push(`<rect x="${pad}" y="${y}" width="${W - pad * 2}" height="${rowH + 6}" rx="12" fill="${colors.text}" fill-opacity="0.07"/>`);
   parts.push(`<text x="${pad + 24}" y="${y + 35}" font-family="${FONT_TEXT}" font-size="22" font-weight="700" fill="${colors.textMuted}">TOTAL</text>`);
   game.sides.forEach((side, i) => {
     parts.push(`<text x="${pad + numW + handColW * i + handColW / 2}" y="${y + 37}" text-anchor="middle" font-family="${FONT}" font-size="32" fill="${sideColor(i).main}">${t[side.id] ?? 0}</text>`);
@@ -132,7 +135,7 @@ export function buildSummarySvg(game: Game, options: SummaryOptions = {}): { svg
 
   // Pie
   y += 70;
-  parts.push(`<text x="${W / 2}" y="${y}" text-anchor="middle" font-family="${FONT_TEXT}" font-size="24" fill="${colors.textDim}">Anotado con ${APP_NAME}</text>`);
+  parts.push(`<text x="${W / 2}" y="${y}" text-anchor="middle" font-family="${FONT_TEXT}" font-size="24" fill="${colors.textDim}">Anotado con ${esc(appName)}</text>`);
   y += 50;
   const H = Math.ceil(y);
 

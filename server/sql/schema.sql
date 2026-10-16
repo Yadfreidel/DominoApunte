@@ -129,6 +129,65 @@ CREATE TABLE IF NOT EXISTS domino.tournaments (
   source_user_id  INTEGER REFERENCES domino.users (id) ON DELETE SET NULL
 );
 
+-- ---------------------------------------------------------------------
+-- Migración 2026-11 (idempotente, no borra datos): panel de administración privado.
+-- ---------------------------------------------------------------------
+
+-- Cuentas: correo para iniciar sesión, rol de propietario y vínculo opcional con un perfil de
+-- jugador (no todos los jugadores tienen cuenta).
+ALTER TABLE domino.users ADD COLUMN IF NOT EXISTS email TEXT;
+ALTER TABLE domino.users ADD COLUMN IF NOT EXISTS player_id INTEGER REFERENCES domino.players (id) ON DELETE SET NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS users_email_key ON domino.users (lower(email)) WHERE email IS NOT NULL;
+ALTER TABLE domino.users DROP CONSTRAINT IF EXISTS users_role_check;
+ALTER TABLE domino.users ADD CONSTRAINT users_role_check CHECK (role IN ('propietario', 'admin', 'anotador'));
+
+-- Recuperación de contraseña: solo se guarda el hash del enlace, de un solo uso y con vencimiento.
+CREATE TABLE IF NOT EXISTS domino.password_resets (
+  id          INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id     INTEGER NOT NULL REFERENCES domino.users (id) ON DELETE CASCADE,
+  token_hash  TEXT    NOT NULL UNIQUE,
+  created_at  TEXT    NOT NULL,
+  expires_at  TEXT    NOT NULL,
+  used_at     TEXT
+);
+
+-- Jugadores: foto y papelera (deleted_at). Un perfil en la papelera conserva su historial.
+ALTER TABLE domino.players ADD COLUMN IF NOT EXISTS photo TEXT;
+ALTER TABLE domino.players ADD COLUMN IF NOT EXISTS deleted_at TEXT;
+ALTER TABLE domino.players ADD COLUMN IF NOT EXISTS deleted_by TEXT;
+
+-- Nombres anteriores (renombrados o fusionados) que apuntan al perfil vigente, para que una
+-- partida antigua que llegue al sincronizar no vuelva a crear el perfil duplicado.
+CREATE TABLE IF NOT EXISTS domino.player_aliases (
+  alias_key   TEXT    PRIMARY KEY,                  -- nombre en minúsculas
+  player_id   INTEGER NOT NULL REFERENCES domino.players (id) ON DELETE CASCADE,
+  created_at  TEXT    NOT NULL
+);
+
+-- Partidas: papelera y reglas opcionales elegidas al crearla (copiadas, no referenciadas: cambiar
+-- los valores predeterminados no modifica partidas existentes).
+ALTER TABLE domino.games ADD COLUMN IF NOT EXISTS deleted_at TEXT;
+ALTER TABLE domino.games ADD COLUMN IF NOT EXISTS deleted_by TEXT;
+ALTER TABLE domino.games ADD COLUMN IF NOT EXISTS rules_json TEXT;
+CREATE INDEX IF NOT EXISTS games_deleted_idx ON domino.games (deleted_at);
+CREATE INDEX IF NOT EXISTS games_source_user_idx ON domino.games (source_user_id);
+
+-- Torneos: pausa y correcciones administrativas.
+ALTER TABLE domino.tournaments ADD COLUMN IF NOT EXISTS admin_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE domino.tournaments DROP CONSTRAINT IF EXISTS tournaments_status_check;
+ALTER TABLE domino.tournaments ADD CONSTRAINT tournaments_status_check CHECK (status IN ('activo', 'pausado', 'cancelado'));
+
+-- Auditoría inmutable: el registro no se puede editar ni borrar (ni siquiera desde el servidor).
+CREATE OR REPLACE FUNCTION domino.corrections_inmutables() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+  RAISE EXCEPTION 'El registro de auditoría no se puede modificar ni eliminar.';
+END;
+$$;
+DROP TRIGGER IF EXISTS corrections_inmutables ON domino.corrections;
+CREATE TRIGGER corrections_inmutables BEFORE UPDATE OR DELETE ON domino.corrections
+  FOR EACH ROW EXECUTE FUNCTION domino.corrections_inmutables();
+CREATE INDEX IF NOT EXISTS corrections_created_idx ON domino.corrections (created_at);
+
 -- Seguridad adicional: RLS activado sin políticas. El servidor se conecta como
 -- dueño de las tablas y no se ve afectado; cualquier otro rol queda bloqueado.
 ALTER TABLE domino.users         ENABLE ROW LEVEL SECURITY;
@@ -140,3 +199,5 @@ ALTER TABLE domino.corrections   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domino.deleted_games ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domino.settings      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domino.tournaments   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE domino.password_resets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE domino.player_aliases  ENABLE ROW LEVEL SECURITY;

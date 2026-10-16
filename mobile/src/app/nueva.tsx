@@ -8,7 +8,7 @@ import { useDialogs } from '@/components/Dialogs';
 import { StarterDraw } from '@/components/StarterDraw';
 import { Button, Card, ErrorText, Field, Label, Loading, Pill, Screen, Select, type IconName } from '@/components/ui';
 import { DrawError, drawPairs } from '@/domain/draw.ts';
-import { coupleName, MAX_NAME_LENGTH, nameKey, normalizeName, parseTarget, validateSetup, type Mode } from '@/domain/game.ts';
+import { coupleName, MAX_NAME_LENGTH, nameKey, normalizeName, parsePoints, parseTarget, validateSetup, type Mode } from '@/domain/game.ts';
 import type { SetupDraft } from '@/domain/repository.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, sideColor, space } from '@/theme';
@@ -19,20 +19,22 @@ const webNoOutline = Platform.OS === 'web' ? ({ outlineStyle: 'none' } as unknow
 
 export default function NewGame() {
   const store = useStore();
-  const { settings, knownPlayers, currentGame, photoOf } = store;
+  const { defaults, knownPlayers, currentGame, photoOf, branding } = store;
   const { toast } = useDialogs();
 
-  const individualAllowed = settings.modes.individual;
-  const parejasAllowed = settings.modes.parejas;
-
+  // Los valores del organizador son solo sugerencias iniciales: el usuario elige en cada partida.
   const [countChoice, setCountChoice] = useState(2);
-  const [modeChoice, setModeChoice] = useState<Mode>('individual');
+  const [modeChoice, setModeChoice] = useState<Mode>(defaults.defaultMode);
+  const [passText, setPassText] = useState(defaults.passPoints ? String(defaults.passPoints) : '');
   /** Individual: un nombre por jugador. Parejas: [pareja 1 A, pareja 1 B, pareja 2 A, pareja 2 B]. */
   const [names, setNames] = useState(['', '', '', '']);
   const [teamNames, setTeamNames] = useState<[string, string]>(['', '']);
   const [starterIndex, setStarterIndex] = useState<number | null>(null);
   const [practice, setPractice] = useState(false);
-  const [targetPick, setTargetChoice] = useState<number | 'otra'>(settings.defaultTarget);
+  const [targetPick, setTargetChoice] = useState<number | 'otra'>(defaults.defaultTarget);
+  // Campos que el usuario (o su borrador) ya eligió: las sugerencias del organizador no los pisan.
+  const [touched, setTouched] = useState({ mode: false, target: false, pass: false });
+  const touch = (field: 'mode' | 'target' | 'pass') => setTouched((t) => (t[field] ? t : { ...t, [field]: true }));
   const [customTarget, setCustomTarget] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -48,11 +50,14 @@ export default function NewGame() {
         if (!alive) return;
         if (d) {
           setModeChoice(d.mode);
+          // Los borradores anteriores no indicaban si la modalidad fue elegida: se respeta como elegida.
+          setTouched((t) => ({ ...t, mode: d.modeChosen ?? true, pass: t.pass || d.passPoints !== undefined }));
           setCountChoice(d.countChoice);
           setNames(d.names.length === 4 ? d.names : ['', '', '', '']);
           setTeamNames(d.teamNames);
           setStarterIndex(d.starterIndex);
           setPractice(d.practice);
+          if (d.passPoints !== undefined) setPassText(d.passPoints ? String(d.passPoints) : '');
         }
         setDraftLoaded(true);
       },
@@ -65,16 +70,38 @@ export default function NewGame() {
 
   useEffect(() => {
     if (!draftLoaded || started.current) return;
-    const draft: SetupDraft = { mode: modeChoice, countChoice, names, teamNames, starterIndex, practice };
+    const passPoints = /^\d+$/.test(passText) ? Number(passText) : 0;
+    // Solo se guarda lo que el usuario eligió; lo demás sigue las sugerencias del organizador.
+    const draft: SetupDraft = {
+      mode: modeChoice,
+      modeChosen: touched.mode,
+      countChoice,
+      names,
+      teamNames,
+      starterIndex,
+      practice,
+      passPoints: touched.pass ? passPoints : undefined,
+    };
     void saveSetupDraft(draft);
-  }, [draftLoaded, modeChoice, countChoice, names, teamNames, starterIndex, practice, saveSetupDraft]);
+  }, [draftLoaded, modeChoice, countChoice, names, teamNames, starterIndex, practice, passText, saveSetupDraft, touched]);
 
-  // La selección efectiva respeta siempre las metas y modalidades vigentes (pueden cambiar al sincronizar).
-  const mode: Mode = !individualAllowed ? 'parejas' : !parejasAllowed ? 'individual' : modeChoice;
+  // La configuración del organizador llega después de abrir la pantalla (se lee del servidor):
+  // se aplica a los campos que el usuario todavía no cambió.
+  const defaultsKey = `${draftLoaded}|${defaults.defaultMode}|${defaults.defaultTarget}|${defaults.passPoints}`;
+  const [appliedDefaults, setAppliedDefaults] = useState(defaultsKey);
+  if (draftLoaded && appliedDefaults !== defaultsKey) {
+    setAppliedDefaults(defaultsKey);
+    if (!touched.mode) setModeChoice(defaults.defaultMode);
+    if (!touched.target) setTargetChoice(defaults.defaultTarget);
+    if (!touched.pass) setPassText(defaults.passPoints ? String(defaults.passPoints) : '');
+  }
+
+  const mode: Mode = modeChoice;
   const count = mode === 'parejas' ? 4 : countChoice;
   const targetChoice =
-    targetPick !== 'otra' && !settings.targets.includes(targetPick) ? settings.defaultTarget : targetPick;
+    targetPick !== 'otra' && !defaults.targets.includes(targetPick) ? defaults.defaultTarget : targetPick;
   const target = targetChoice === 'otra' ? parseTarget(customTarget) : ({ ok: true, value: targetChoice } as const);
+  const pass = passText.trim() === '' ? ({ ok: true, value: 0 } as const) : parsePoints(passText);
 
   const effectiveNames = names.slice(0, count);
   const starter = starterIndex != null && starterIndex < count ? starterIndex : null;
@@ -93,6 +120,7 @@ export default function NewGame() {
       : effectiveNames.map((n, i) => ({ name: n.trim() || `Jugador ${i + 1}`, members: n.trim() ? [n.trim()] : [] }));
 
   const chooseMode = (m: Mode) => {
+    touch('mode');
     setModeChoice(m);
     setError(null);
   };
@@ -133,6 +161,7 @@ export default function NewGame() {
 
   const start = async () => {
     if (!target.ok) return setError(target.error);
+    if (!pass.ok) return setError(`Puntos por pase: ${pass.error}`);
     const setup = {
       playerCount: count,
       names: effectiveNames,
@@ -141,6 +170,7 @@ export default function NewGame() {
       teamNames: mode === 'parejas' ? teamNames : undefined,
       practice,
       starterIndex: starter,
+      rules: pass.value > 0 ? { passPoints: pass.value } : null,
     };
     const problem = validateSetup(setup);
     if (problem) return setError(problem);
@@ -189,6 +219,12 @@ export default function NewGame() {
 
   return (
     <Screen header={<AppHeader subtitle="Nueva partida" />}>
+      {branding.homeText ? (
+        <Card style={s.welcome}>
+          <Text style={s.welcomeText}>{branding.homeText}</Text>
+        </Card>
+      ) : null}
+
       {currentGame?.status === 'pendiente' ? (
         <Card style={s.resume} accent={colors.warning}>
           <Ionicons name="play-circle" size={28} color={colors.warning} />
@@ -209,7 +245,6 @@ export default function NewGame() {
           title="Individual"
           subtitle="2 a 4 jugadores"
           active={mode === 'individual'}
-          disabled={!individualAllowed}
           color={colors.lime}
           onPress={() => chooseMode('individual')}
         />
@@ -218,14 +253,10 @@ export default function NewGame() {
           title="Por parejas"
           subtitle="2 parejas · 4 jugadores"
           active={mode === 'parejas'}
-          disabled={!parejasAllowed}
           color={colors.purple}
           onPress={() => chooseMode('parejas')}
         />
       </View>
-      {!parejasAllowed || !individualAllowed ? (
-        <Text style={s.hint}>Algunas modalidades fueron deshabilitadas por el administrador.</Text>
-      ) : null}
 
       {/* Jugadores */}
       <Card style={s.section}>
@@ -317,10 +348,25 @@ export default function NewGame() {
       <Card style={s.section}>
         <Text style={s.cardTitle}>Meta de la partida</Text>
         <View style={s.wrap}>
-          {settings.targets.map((t) => (
-            <Pill key={t} label={String(t)} active={targetChoice === t} onPress={() => setTargetChoice(t)} />
+          {defaults.targets.map((t) => (
+            <Pill
+              key={t}
+              label={String(t)}
+              active={targetChoice === t}
+              onPress={() => {
+                touch('target');
+                setTargetChoice(t);
+              }}
+            />
           ))}
-          <Pill label="Otra" active={targetChoice === 'otra'} onPress={() => setTargetChoice('otra')} />
+          <Pill
+            label="Otra"
+            active={targetChoice === 'otra'}
+            onPress={() => {
+              touch('target');
+              setTargetChoice('otra');
+            }}
+          />
         </View>
         {targetChoice === 'otra' ? (
           <Field
@@ -336,6 +382,23 @@ export default function NewGame() {
             error={customTarget && !target.ok ? target.error : null}
           />
         ) : null}
+        <Field
+          label="Puntos por pase (opcional)"
+          value={passText}
+          onChangeText={(t) => {
+            touch('pass');
+            setPassText(t.replace(/[^\d]/g, ''));
+            setError(null);
+          }}
+          keyboardType="number-pad"
+          placeholder="0 = sin penalización"
+          maxLength={4}
+          error={!pass.ok ? pass.error : null}
+        />
+        <Text style={s.cardHint}>
+          Si un jugador pasa, se anotan estos puntos al rival con el botón «Pase» del teclado.
+          {defaults.passPoints ? ` Sugerido por el organizador: ${defaults.passPoints}.` : ''}
+        </Text>
         <View style={s.toggle}>
           <View style={{ flex: 1 }}>
             <Text style={s.toggleLabel}>Partida de práctica</Text>
@@ -345,7 +408,7 @@ export default function NewGame() {
             value={practice}
             onValueChange={setPractice}
             trackColor={{ false: colors.border, true: colors.limeDeep }}
-            thumbColor={practice ? colors.lime : '#C9CEE6'}
+            thumbColor={practice ? colors.lime : colors.thumbOff}
             accessibilityLabel="Partida de práctica"
           />
         </View>
@@ -395,7 +458,7 @@ function ModeTile({
         pressed && { opacity: 0.8 },
       ]}
     >
-      <View style={[s.modeIcon, { backgroundColor: active ? color : 'rgba(255,255,255,0.06)' }]}>
+      <View style={[s.modeIcon, { backgroundColor: active ? color : colors.pressed }]}>
         <Ionicons name={icon} size={24} color={active ? colors.onLime : colors.textMuted} />
       </View>
       <Text style={[s.modeTitle, active && { color }]}>{title}</Text>
@@ -438,7 +501,7 @@ const s = StyleSheet.create({
     paddingRight: space.md,
     borderRadius: radius.lg,
     borderWidth: 1.5,
-    backgroundColor: 'rgba(5, 10, 36, 0.75)',
+    backgroundColor: colors.sheetSoft,
   },
   playerLabel: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.8 },
   playerInput: { color: colors.text, fontSize: 19, fontWeight: '600', paddingVertical: 6, minHeight: 40 },
@@ -455,7 +518,7 @@ const s = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: 'rgba(8, 14, 48, 0.7)',
+    backgroundColor: colors.field,
   },
   recentText: { color: colors.text, fontSize: 15, fontWeight: '600' },
   versusCard: { gap: space.md, paddingVertical: space.lg },
@@ -466,4 +529,6 @@ const s = StyleSheet.create({
   resumeTitle: { color: colors.text, fontWeight: '700', fontSize: 16 },
   resumeText: { color: colors.textMuted, fontSize: 14 },
   footnote: { color: colors.textDim, fontSize: 13, textAlign: 'center' },
+  welcome: { paddingVertical: space.md },
+  welcomeText: { color: colors.text, fontSize: 15, lineHeight: 21, textAlign: 'center' },
 });

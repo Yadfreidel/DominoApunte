@@ -4,6 +4,7 @@ import type { Game, Mode } from './game.ts';
 import { nameKey, normalizeName } from './game.ts';
 import { migrateGames, resolvePlayers, type PlayerRecord } from './players.ts';
 import type { Tournament } from './tournament.ts';
+import type { Appearance } from './appearance.ts';
 
 export interface KeyValueStorage {
   getItem(key: string): Promise<string | null>;
@@ -24,11 +25,60 @@ export interface Settings {
 /** Borrador de la pantalla de nueva partida: conserva sorteos confirmados al recargar. */
 export interface SetupDraft {
   mode: 'individual' | 'parejas';
+  /** true si el usuario eligió la modalidad (si no, se usa la sugerida por el organizador). */
+  modeChosen?: boolean;
   countChoice: number;
   names: string[];
   teamNames: [string, string];
   starterIndex: number | null;
   practice: boolean;
+  /** Puntos por pase elegidos para esta partida (si el usuario los cambió). */
+  passPoints?: number;
+}
+
+/** Identidad visual de la app (nombre, logo y textos), definida por el administrador. */
+export interface Branding {
+  appName: string;
+  tagline: string;
+  homeText: string;
+  /** data URI PNG/JPEG/WebP o null. */
+  logo: string | null;
+}
+
+export const DEFAULT_BRANDING: Branding = { appName: 'Dominó', tagline: 'Marcador de partidas', homeText: '', logo: null };
+
+/** Configuración pública del servidor: valores predeterminados, identidad visual y tema global. */
+export interface PublicConfig {
+  settings: {
+    defaultTargets: number[];
+    defaultTarget: number;
+    defaultMode: Mode;
+    rules: { passPoints: number };
+  };
+  branding: Branding;
+  appearance: Appearance;
+}
+
+export interface GameDefaults {
+  targets: number[];
+  defaultTarget: number;
+  defaultMode: Mode;
+  passPoints: number;
+}
+
+/**
+ * Valores iniciales para una partida nueva: los del organizador (servidor) si existen; si no, los
+ * del dispositivo. Son solo sugerencias: el usuario puede cambiarlos en cada partida.
+ */
+export function gameDefaults(settings: Settings, config: PublicConfig | null): GameDefaults {
+  const server = config?.settings;
+  const targets = [...new Set([...(server?.defaultTargets ?? []), ...settings.targets])].sort((a, b) => a - b);
+  return {
+    targets,
+    defaultTarget: server?.defaultTarget ?? settings.defaultTarget,
+    defaultMode: server?.defaultMode === 'parejas' ? 'parejas' : 'individual',
+    passPoints: server?.rules?.passPoints ?? 0,
+  };
 }
 
 export interface AppData {
@@ -72,6 +122,7 @@ export const KEYS = {
   tournament: (id: string) => `${PREFIX}tournament:${id}`,
   syncedTournaments: `${PREFIX}syncedTournaments`,
   setupDraft: `${PREFIX}setupDraft`,
+  publicConfig: `${PREFIX}publicConfig`,
 };
 
 function isTournament(value: unknown): value is Tournament {
@@ -208,6 +259,15 @@ export class Repository {
 
   saveSyncedTournamentRevisions(revisions: Record<string, number>): Promise<void> {
     return this.enqueue(() => this.storage.setItem(KEYS.syncedTournaments, JSON.stringify(revisions)));
+  }
+
+  async loadPublicConfig(): Promise<PublicConfig | null> {
+    const config = await this.readJson<PublicConfig>(KEYS.publicConfig, []);
+    return config?.settings && config.branding ? config : null;
+  }
+
+  savePublicConfig(config: PublicConfig): Promise<void> {
+    return this.enqueue(() => this.storage.setItem(KEYS.publicConfig, JSON.stringify(config)));
   }
 
   async loadDraft(): Promise<SetupDraft | null> {

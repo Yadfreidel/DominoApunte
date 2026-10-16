@@ -1,28 +1,34 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
-import {
-  AdminCorrections,
-  AdminGames,
-  AdminHome,
-  AdminPlayers,
-  AdminRanking,
-  AdminSettings,
-  AdminUsers,
-} from '@/components/admin/sections';
+import { AdminExport } from '@/components/admin/export';
+import { AdminAppearance, AdminBranding } from '@/components/admin/identity';
+import { AdminDuplicates, AdminPlayers } from '@/components/admin/players';
+import { AdminAudit, AdminGames, AdminHome, AdminRanking, AdminRules, AdminTests, AdminUsers } from '@/components/admin/sections';
+import { AdminTournaments } from '@/components/admin/tournaments';
+import { AdminTrash } from '@/components/admin/trash';
 import { AppHeader } from '@/components/AppHeader';
-import { Screen, type IconName } from '@/components/ui';
+import { useDialogs } from '@/components/Dialogs';
+import { Button, Screen, type IconName } from '@/components/ui';
+import { ROLE_LABEL } from '@/services/api';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, space } from '@/theme';
 
 const SECTIONS = [
-  { key: 'inicio', label: 'Inicio', icon: 'speedometer-outline', Component: AdminHome },
-  { key: 'jugadores', label: 'Jugadores', icon: 'people-outline', Component: AdminPlayers },
+  { key: 'resumen', label: 'Resumen', icon: 'speedometer-outline', Component: AdminHome },
   { key: 'partidas', label: 'Partidas', icon: 'grid-outline', Component: AdminGames },
+  { key: 'jugadores', label: 'Jugadores', icon: 'people-outline', Component: AdminPlayers },
+  { key: 'duplicados', label: 'Duplicados', icon: 'git-merge-outline', Component: AdminDuplicates },
+  { key: 'torneos', label: 'Torneos', icon: 'trophy-outline', Component: AdminTournaments },
+  { key: 'reglas', label: 'Reglas', icon: 'options-outline', Component: AdminRules },
+  { key: 'pruebas', label: 'Pruebas', icon: 'flask-outline', Component: AdminTests },
+  { key: 'papelera', label: 'Papelera', icon: 'trash-outline', Component: AdminTrash },
+  { key: 'auditoria', label: 'Auditoría', icon: 'document-text-outline', Component: AdminAudit },
+  { key: 'exportar', label: 'Exportar', icon: 'download-outline', Component: AdminExport },
   { key: 'ranking', label: 'Ranking', icon: 'podium-outline', Component: AdminRanking },
-  { key: 'correcciones', label: 'Correcciones', icon: 'document-text-outline', Component: AdminCorrections },
-  { key: 'configuracion', label: 'Configuración', icon: 'options-outline', Component: AdminSettings },
-  { key: 'usuarios', label: 'Usuarios', icon: 'key-outline', Component: AdminUsers },
+  { key: 'identidad', label: 'Identidad visual', icon: 'image-outline', Component: AdminBranding },
+  { key: 'apariencia', label: 'Apariencia', icon: 'color-palette-outline', Component: AdminAppearance },
+  { key: 'cuentas', label: 'Cuentas', icon: 'key-outline', Component: AdminUsers },
 ] as const satisfies readonly { key: string; label: string; icon: IconName; Component: () => React.JSX.Element }[];
 
 const WIDE_BREAKPOINT = 900;
@@ -30,12 +36,20 @@ const WIDE_BREAKPOINT = 900;
 export default function AdminPanel() {
   const { seccion } = useLocalSearchParams<{ seccion?: string }>();
   const { width } = useWindowDimensions();
-  const { user } = useStore();
+  const { user, logout } = useStore();
+  const { confirm, toast } = useDialogs();
   const wide = width >= WIDE_BREAKPOINT;
   const active = SECTIONS.find((sct) => sct.key === seccion) ?? SECTIONS[0];
   const Active = active.Component;
 
   const select = (key: string) => router.setParams({ seccion: key });
+
+  const signOut = async () => {
+    const ok = await confirm({ title: '¿Cerrar sesión?', message: 'Tendrás que volver a ingresar tu correo y contraseña para entrar al panel.', confirmLabel: 'Cerrar sesión' });
+    if (!ok) return;
+    await logout();
+    toast('Sesión cerrada', 'info');
+  };
 
   const nav = SECTIONS.map((sct) => {
     const selected = sct.key === active.key;
@@ -53,17 +67,25 @@ export default function AdminPanel() {
     );
   });
 
+  const account = (
+    <View style={s.sideUser}>
+      <Ionicons name="shield-checkmark" size={20} color={colors.purple} />
+      <View style={{ flex: 1 }}>
+        <Text style={s.sideUserText} numberOfLines={1}>
+          {user?.email ?? user?.username}
+        </Text>
+        <Text style={s.sideRole}>{user ? ROLE_LABEL[user.role] : ''}</Text>
+      </View>
+      <Button label="Salir" icon="log-out-outline" size="sm" variant="ghost" onPress={signOut} />
+    </View>
+  );
+
   return (
     <Screen header={<AppHeader subtitle="Panel de administración" />} maxWidth={wide ? 1240 : 720}>
       {wide ? (
         <View style={s.wideLayout}>
           <View style={s.sidebar} accessibilityRole="tablist">
-            <View style={s.sideUser}>
-              <Ionicons name="shield-checkmark" size={20} color={colors.purple} />
-              <Text style={s.sideUserText} numberOfLines={1}>
-                {user?.username}
-              </Text>
-            </View>
+            {account}
             {nav}
           </View>
           <View style={s.main}>
@@ -72,6 +94,7 @@ export default function AdminPanel() {
         </View>
       ) : (
         <>
+          {account}
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.tabs} accessibilityRole="tablist">
             {nav}
           </ScrollView>
@@ -85,7 +108,7 @@ export default function AdminPanel() {
 const s = StyleSheet.create({
   wideLayout: { flexDirection: 'row', gap: space.xl, alignItems: 'flex-start' },
   sidebar: {
-    width: 240,
+    width: 250,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.borderSoft,
@@ -102,9 +125,10 @@ const s = StyleSheet.create({
     borderBottomColor: colors.borderSoft,
     marginBottom: space.sm,
   },
-  sideUserText: { color: colors.text, fontFamily: fonts.heading, fontSize: 18, flex: 1 },
-  sideItem: { flexDirection: 'row', alignItems: 'center', gap: space.md, minHeight: 48, paddingHorizontal: space.md, borderRadius: radius.md },
-  sideItemActive: { backgroundColor: 'rgba(198, 244, 50, 0.1)' },
+  sideUserText: { color: colors.text, fontFamily: fonts.heading, fontSize: 17 },
+  sideRole: { color: colors.textDim, fontSize: 12 },
+  sideItem: { flexDirection: 'row', alignItems: 'center', gap: space.md, minHeight: 46, paddingHorizontal: space.md, borderRadius: radius.md },
+  sideItemActive: { backgroundColor: colors.limeSoft },
   sideLabel: { color: colors.text, fontSize: 16, fontWeight: '600' },
   main: { flex: 1, minWidth: 0 },
   tabs: { gap: space.sm, paddingBottom: space.sm },
@@ -117,8 +141,8 @@ const s = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: 1.5,
     borderColor: colors.border,
-    backgroundColor: 'rgba(8, 14, 48, 0.7)',
+    backgroundColor: colors.field,
   },
-  tabActive: { borderColor: colors.lime, backgroundColor: 'rgba(198, 244, 50, 0.1)' },
+  tabActive: { borderColor: colors.lime, backgroundColor: colors.limeSoft },
   tabLabel: { color: colors.textMuted, fontSize: 15, fontWeight: '700' },
 });

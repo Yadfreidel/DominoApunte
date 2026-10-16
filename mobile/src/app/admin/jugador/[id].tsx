@@ -2,6 +2,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 import { useAdminQuery } from '@/components/admin/useAdminQuery';
 import { AppHeader } from '@/components/AppHeader';
+import { Avatar } from '@/components/Avatar';
 import { formatDateTime, GameSummary } from '@/components/GameSummary';
 import { Button, Card, EmptyState, Loading, Screen, Stat } from '@/components/ui';
 import type { PlayerRow, ServerGame } from '@/services/api';
@@ -10,7 +11,7 @@ import { goBackOr } from '@/navigation';
 
 export default function AdminPlayerDetail() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const q = useAdminQuery<{ player: PlayerRow; games: ServerGame[] }>(`/admin/players/${encodeURIComponent(id)}`);
+  const q = useAdminQuery<{ player: PlayerRow; games: ServerGame[]; aliases: string[] }>(`/admin/players/${encodeURIComponent(id)}`);
   const back = () => goBackOr({ pathname: '/admin', params: { seccion: 'jugadores' } });
 
   return (
@@ -23,14 +24,23 @@ export default function AdminPlayerDetail() {
       {q.data ? (
         <>
           <Card style={{ gap: space.md }}>
-            <View>
-              <Text style={s.name}>{q.data.player.name}</Text>
-              <Text style={s.muted}>
-                {q.data.player.active ? 'Activo' : 'Inactivo'} · registrado {formatDateTime(q.data.player.createdAt)}
-              </Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: space.md }}>
+              <Avatar name={q.data.player.name} colorIndex={0} size={64} photo={q.data.player.photo ?? undefined} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.name}>{q.data.player.name}</Text>
+                <Text style={s.muted}>
+                  {q.data.player.deletedAt ? 'En la papelera' : q.data.player.active ? 'Activo' : 'Inactivo'} · registrado {formatDateTime(q.data.player.createdAt)}
+                </Text>
+                <Text style={s.muted}>
+                  {q.data.player.account
+                    ? `Cuenta de acceso: ${q.data.player.account.username}${q.data.player.account.active ? '' : ' (bloqueada)'}`
+                    : 'Sin cuenta de acceso'}
+                  {q.data.aliases.length ? ` · nombres anteriores: ${q.data.aliases.join(', ')}` : ''}
+                </Text>
+              </View>
             </View>
             <View style={s.stats}>
-              <Stat label="Jugadas" value={q.data.player.played} />
+              <Stat label="Partidas oficiales" value={q.data.player.played} />
               <Stat label="Ganadas" value={q.data.player.wins} color={colors.lime} />
               <Stat label="Perdidas" value={q.data.player.losses} color={colors.danger} />
               <Stat label="% victorias" value={`${q.data.player.winRate}%`} color={colors.purple} />

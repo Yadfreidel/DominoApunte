@@ -266,18 +266,23 @@ describe('sincronización y administración', () => {
     assert.equal(byDate.data.games.length, 0);
   });
 
-  test('no se puede eliminar un jugador con partidas; sí uno sin partidas', async () => {
+  test('eliminar un jugador lo envía a la papelera; solo se borra definitivamente sin partidas', async () => {
     const players = await api('/admin/players', { token: adminToken });
     const ana = players.data.players.find((p) => p.name === 'Ana');
     const del = await api(`/admin/players/${ana.id}`, { method: 'DELETE', token: adminToken, body: { reason: 'Duplicado' } });
-    assert.equal(del.status, 409);
+    assert.equal(del.status, 204);
+    const hard = await api(`/admin/trash/players/${ana.id}`, { method: 'DELETE', token: adminToken, body: { reason: 'Limpieza', confirm: 'ELIMINAR' } });
+    assert.equal(hard.status, 409);
+    assert.match(hard.data.error, /partida/);
+    const restored = await api(`/admin/trash/players/${ana.id}/restore`, { method: 'POST', token: adminToken, body: { reason: 'Error' } });
+    assert.equal(restored.status, 204);
     const created = await api('/admin/players', { method: 'POST', token: adminToken, body: { name: 'Temporal' } });
     assert.equal(created.status, 201);
-    const ok = await api(`/admin/players/${created.data.player.id}`, {
-      method: 'DELETE',
-      token: adminToken,
-      body: { reason: 'Creado por error' },
-    });
+    const id = created.data.player.id;
+    await api(`/admin/players/${id}`, { method: 'DELETE', token: adminToken, body: { reason: 'Creado por error' } });
+    const noConfirm = await api(`/admin/trash/players/${id}`, { method: 'DELETE', token: adminToken, body: { reason: 'Limpieza' } });
+    assert.equal(noConfirm.status, 400);
+    const ok = await api(`/admin/trash/players/${id}`, { method: 'DELETE', token: adminToken, body: { reason: 'Limpieza', confirm: 'ELIMINAR' } });
     assert.equal(ok.status, 204);
   });
 
@@ -290,7 +295,8 @@ describe('sincronización y administración', () => {
       body: { games: [sampleGame('g2', [['s2', 20], ['s1', 5]])] },
     });
     assert.deepEqual(r.data.deleted, ['g2']);
-    assert.equal((await api('/admin/games/g2', { token: adminToken })).status, 404);
+    const trashed = await api('/admin/games/g2', { token: adminToken });
+    assert.ok(trashed.data.game.deletedAt, 'queda en la papelera');
   });
 
   test('configuración de metas y modalidades', async () => {
@@ -303,12 +309,15 @@ describe('sincronización y administración', () => {
     const ok = await api('/admin/settings', {
       method: 'PUT',
       token: adminToken,
-      body: { defaultTargets: [250, 100, 150], defaultTarget: 150, modes: { individual: true, parejas: false } },
+      body: { defaultTargets: [250, 100, 150], defaultTarget: 150, defaultMode: 'parejas', rules: { passPoints: 25 } },
     });
     assert.equal(ok.status, 200);
     const pub = await api('/settings', { token: scorerToken });
     assert.deepEqual(pub.data.settings.defaultTargets, [100, 150, 250]);
-    assert.equal(pub.data.settings.modes.parejas, false);
+    assert.equal(pub.data.settings.defaultMode, 'parejas');
+    assert.equal(pub.data.settings.rules.passPoints, 25);
+    // Son valores predeterminados: el usuario sigue pudiendo elegir cualquier modalidad.
+    assert.deepEqual(pub.data.settings.modes, { individual: true, parejas: true });
   });
 
   test('desactivar un usuario invalida su sesión al instante', async () => {

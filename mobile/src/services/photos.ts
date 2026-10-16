@@ -57,3 +57,30 @@ export async function pickPhoto(source: PhotoSource): Promise<string | null> {
   if (!saved.base64) throw new Error('No se pudo procesar la foto.');
   return `data:image/jpeg;base64,${saved.base64}`;
 }
+
+const LOGO_MAX_SIDE = 512;
+
+/**
+ * Elige un logo de la galería: PNG (conserva la transparencia), con su proporción original y el lado
+ * mayor reducido a 512 px. Devuelve null si el usuario cancela. El servidor vuelve a validar formato,
+ * tamaño y dimensiones.
+ */
+export async function pickLogo(): Promise<string | null> {
+  if (Platform.OS !== 'web') {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) throw new Error('Permite el acceso a tus fotos en los ajustes del teléfono.');
+  }
+  const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: 'images', allowsEditing: false, quality: 1 });
+  const asset = result.canceled ? null : result.assets?.[0];
+  if (!asset) return null;
+  const context = ImageManipulator.manipulate(asset.uri);
+  const w = asset.width || LOGO_MAX_SIDE;
+  const h = asset.height || LOGO_MAX_SIDE;
+  if (Math.max(w, h) > LOGO_MAX_SIDE) {
+    context.resize(w >= h ? { width: LOGO_MAX_SIDE } : { height: LOGO_MAX_SIDE });
+  }
+  const image = await context.renderAsync();
+  const saved = await image.saveAsync({ format: SaveFormat.PNG, base64: true });
+  if (!saved.base64) throw new Error('No se pudo procesar la imagen.');
+  return `data:image/png;base64,${saved.base64}`;
+}

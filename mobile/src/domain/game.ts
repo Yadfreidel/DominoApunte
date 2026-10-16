@@ -55,6 +55,16 @@ export interface Game {
   /** Partida de un torneo: torneo y enfrentamiento del cuadro. */
   tournamentId?: string | null;
   matchId?: string | null;
+  /**
+   * Reglas opcionales elegidas al crear la partida. Se copian: cambiar los valores predeterminados
+   * del organizador no modifica partidas existentes ni en curso.
+   */
+  rules?: GameRules | null;
+}
+
+export interface GameRules {
+  /** Puntos que se anotan al rival cuando un jugador pasa (0 = sin penalización). */
+  passPoints: number;
 }
 
 /**
@@ -77,6 +87,7 @@ export interface GameSetup {
   starterIndex?: number | null;
   /** Partida de torneo: torneo, enfrentamiento y participante del cuadro de cada lado. */
   tournament?: { tournamentId: string; matchId: string; entrantIds: string[] };
+  rules?: GameRules | null;
 }
 
 export const MIN_PLAYERS = 2;
@@ -154,6 +165,8 @@ export function validateSetup(setup: GameSetup): string | null {
   if (new Set(clean.map(nameKey)).size !== clean.length) return 'Un jugador no puede estar dos veces en la misma partida.';
   const ids = (setup.playerIds ?? []).slice(0, mode === 'parejas' ? 4 : playerCount).filter(Boolean);
   if (new Set(ids).size !== ids.length) return 'Un jugador no puede estar dos veces en la misma partida.';
+  const pass = setup.rules?.passPoints ?? 0;
+  if (!Number.isInteger(pass) || pass < 0 || pass > MAX_HAND_POINTS) return `Los puntos por pase deben estar entre 0 y ${MAX_HAND_POINTS}.`;
   if (mode === 'parejas' && setup.teamNames) {
     const teams = setup.teamNames.map(normalizeName);
     if (teams.some((t) => t.length > MAX_NAME_LENGTH)) return 'El nombre del equipo es demasiado largo.';
@@ -222,6 +235,7 @@ export function createGame(setup: GameSetup, now: string, makeId: () => string =
     starterParticipantId: starter,
     tournamentId: setup.tournament?.tournamentId ?? null,
     matchId: setup.tournament?.matchId ?? null,
+    rules: setup.rules ? { passPoints: setup.rules.passPoints } : null,
   };
 }
 
@@ -382,6 +396,7 @@ export function createRematch(game: Game, now: string, makeId: () => string = ne
     starterParticipantId: null,
     tournamentId: null,
     matchId: null,
+    rules: game.rules ? { ...game.rules } : null,
   };
 }
 

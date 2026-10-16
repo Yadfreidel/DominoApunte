@@ -1,7 +1,7 @@
 {
   "name": "domino-puntos",
   "version": "1.0.0",
-  "main": "expo-router/entry",
+  "main": "index.js",
   "dependencies": {
     "@expo-google-fonts/barlow-condensed": "^0.4.1",
     "@expo/metro-runtime": "~57.0.16",

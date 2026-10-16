@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/index.js",
     "dev": "node --watch --env-file-if-exists=.env src/index.js",
+    "set-owner": "node --env-file-if-exists=.env scripts/create-user.js --role propietario",
     "create-admin": "node --env-file-if-exists=.env scripts/create-user.js --role admin",
     "create-user": "node --env-file-if-exists=.env scripts/create-user.js",
     "test": "node --test \"test/**/*.test.js\""

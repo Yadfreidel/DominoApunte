@@ -25,9 +25,9 @@ console.log(
     : `Base de datos: PGlite local en ${process.env.PGLITE_DIR || './data/pglite'}`,
 );
 
-const { n: admins } = await db.get("SELECT COUNT(*)::int AS n FROM domino.users WHERE role = 'admin' AND active = 1");
-if (admins === 0) {
-  console.warn('Aún no hay administradores. Crea uno con:  npm run create-admin -- <usuario>');
+const { n: owners } = await db.get("SELECT COUNT(*)::int AS n FROM domino.users WHERE role = 'propietario' AND active = 1");
+if (owners === 0) {
+  console.warn('Aún no hay propietario. Asígnalo con:  npm run set-owner -- <usuario> --email <tu correo>');
 }
 
 const app = createApp({

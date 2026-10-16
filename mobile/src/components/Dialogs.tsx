@@ -181,7 +181,7 @@ const s = StyleSheet.create({
     width: 58,
     height: 58,
     borderRadius: 29,
-    backgroundColor: 'rgba(198, 244, 50, 0.1)',
+    backgroundColor: colors.limeSoft,
     alignItems: 'center',
     justifyContent: 'center',
   },

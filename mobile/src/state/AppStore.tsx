@@ -3,11 +3,25 @@ import { AppState } from 'react-native';
 import * as G from '@/domain/game.ts';
 import type { Game, GameSetup } from '@/domain/game.ts';
 import { resolvePlayers, type PlayerRecord } from '@/domain/players.ts';
-import { DEFAULT_SETTINGS, Repository, type AppData, type SetupDraft, type Settings } from '@/domain/repository.ts';
+import { sameAppearance } from '@/domain/appearance.ts';
+import {
+  DEFAULT_BRANDING,
+  DEFAULT_SETTINGS,
+  gameDefaults,
+  Repository,
+  type AppData,
+  type Branding,
+  type GameDefaults,
+  type PublicConfig,
+  type SetupDraft,
+  type Settings,
+} from '@/domain/repository.ts';
 import * as T from '@/domain/tournament.ts';
 import type { Tournament, TournamentInput } from '@/domain/tournament.ts';
-import { ApiError, request, type ServerGame, type ServerSettings, type User } from '@/services/api';
+import { storeAppearance } from '@/services/appearance';
+import { ApiError, isAdminRole, request, type ServerGame, type User } from '@/services/api';
 import { asyncStorageAdapter, tokenStore } from '@/services/storage';
+import { activeAppearance } from '@/theme';
 
 const SYNC_BATCH = 50;
 const SYNC_INTERVAL_MS = 60_000;
@@ -35,8 +49,16 @@ interface StoreValue {
   photoOf(name: string): string | undefined;
   setPhoto(name: string, dataUri: string | null): Promise<void>;
   user: User | null;
+  /** Propietario o administrador (la interfaz se adapta; el servidor vuelve a verificarlo siempre). */
   isAdmin: boolean;
-  serverManagedSettings: boolean;
+  /** Identidad visual definida por el administrador (o la original). */
+  branding: Branding;
+  /** Valores sugeridos para una partida nueva; el usuario puede cambiarlos. */
+  defaults: GameDefaults;
+  /** true si llegó un tema global nuevo que se aplicará al volver a abrir la app. */
+  themePending: boolean;
+  /** Vuelve a leer la configuración pública del servidor (valores predeterminados, identidad, tema). */
+  refreshPublicConfig(): Promise<PublicConfig | null>;
   sync: SyncStatus;
   startGame(setup: GameSetup): Promise<Game>;
   addHand(gameId: string, sideId: string, points: number, handId: string): Promise<void>;
@@ -59,7 +81,7 @@ interface StoreValue {
   login(username: string, password: string): Promise<User>;
   logout(): Promise<void>;
   /** Petición autenticada al servidor. Si la sesión dejó de ser válida, la cierra. */
-  api<T>(path: string, options?: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<T>;
+  api<T>(path: string, options?: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal; text?: boolean }): Promise<T>;
 }
 
 const StoreContext = createContext<StoreValue | null>(null);
@@ -74,7 +96,8 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [data, setData] = useState<AppData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
-  const [serverManagedSettings, setServerManaged] = useState(false);
+  const [publicConfig, setPublicConfig] = useState<PublicConfig | null>(null);
+  const [themePending, setThemePending] = useState(false);
   const [sync, setSync] = useState<SyncStatus>({ syncing: false, pending: 0, lastSyncAt: null, lastError: null });
 
   const dataRef = useRef<AppData | null>(null);
@@ -102,14 +125,13 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const clearSession = useCallback(async () => {
     tokenRef.current = null;
     setUser(null);
-    setServerManaged(false);
     await tokenStore.clear();
   }, []);
 
   const authedRequest = useCallback(
     async <R,>(
       path: string,
-      options: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal } = {},
+      options: { method?: string; body?: unknown; timeoutMs?: number; signal?: AbortSignal; text?: boolean } = {},
     ): Promise<R> => {
       const apiUrl = dataRef.current?.settings.apiUrl ?? '';
       if (!tokenRef.current) throw new ApiError(401, 'Debes iniciar sesión.');
@@ -123,22 +145,25 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     [clearSession],
   );
 
-  const applyServerSettings = useCallback(
-    async (server: ServerSettings) => {
-      const d = dataRef.current;
-      if (!d) return;
-      const settings: Settings = {
-        ...d.settings,
-        targets: server.defaultTargets,
-        defaultTarget: server.defaultTarget,
-        modes: server.modes,
-      };
-      await repo.saveSettings(settings);
-      commit({ ...dataRef.current!, settings });
-      setServerManaged(true);
-    },
-    [commit, repo],
-  );
+  /**
+   * Configuración pública (no requiere sesión): se guarda en el dispositivo para usarla sin conexión.
+   * Un tema global nuevo se guarda para aplicarse desde el primer cuadro la próxima vez que se abra.
+   */
+  const refreshPublicConfig = useCallback(async (): Promise<PublicConfig | null> => {
+    const apiUrl = dataRef.current?.settings.apiUrl;
+    if (!apiUrl) return null;
+    try {
+      const config = await request<PublicConfig>(apiUrl, '/public/config');
+      if (!config?.settings || !config.branding || !config.appearance) return null;
+      await repo.savePublicConfig(config);
+      setPublicConfig(config);
+      storeAppearance(config.appearance);
+      setThemePending(!sameAppearance(config.appearance, activeAppearance));
+      return config;
+    } catch {
+      return null; // Sin conexión: se siguen usando los valores guardados.
+    }
+  }, [repo]);
 
   const syncNow = useCallback(async () => {
     const d = dataRef.current;
@@ -149,9 +174,6 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     syncing.current = true;
     setSync((s) => ({ ...s, syncing: true }));
     try {
-      const { settings } = await authedRequest<{ settings: ServerSettings }>('/settings');
-      await serial(() => applyServerSettings(settings));
-
       const snapshot = dataRef.current!;
       const pending = snapshot.games.filter((g) => snapshot.syncedRevisions[g.id] !== g.revision);
       const pendingTournaments = snapshot.tournaments.filter((t) => snapshot.syncedTournamentRevisions[t.id] !== t.revision);
@@ -159,6 +181,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       const known = snapshot.games
         .filter((g) => snapshot.syncedRevisions[g.id] === g.revision)
         .map((g) => ({ id: g.id, revision: g.revision, adminRevision: g.adminRevision ?? 0 }));
+      const knownTournaments = snapshot.tournaments
+        .filter((t) => snapshot.syncedTournamentRevisions[t.id] === t.revision)
+        .map((t) => ({ id: t.id, adminRevision: t.adminRevision ?? 0 }));
       // Siempre al menos una petición, aunque no haya partidas pendientes. Los torneos van primero,
       // para que el servidor conozca el cuadro antes de recibir sus partidas.
       for (let i = 0; i === 0 || i < pending.length; i += SYNC_BATCH) {
@@ -170,7 +195,12 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           deleted: string[];
           errors: { id: string | null; error: string }[];
           acceptedTournaments?: { id: string }[];
-        }>('/sync/games', { method: 'POST', body: { games: batch, known: i === 0 ? known : [], tournaments: tBatch } });
+          serverTournaments?: Tournament[];
+        }>('/sync/games', {
+          method: 'POST',
+          // pull: el servidor entrega también lo que un administrador corrigió, restauró o creó para esta cuenta.
+          body: i === 0 ? { games: batch, known, tournaments: tBatch, knownTournaments, pull: true } : { games: batch, known: [], tournaments: [] },
+        });
 
         await serial(async () => {
           const cur = dataRef.current!;
@@ -183,11 +213,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             if (local && local.revision === sent.get(a.id)) synced[a.id] = local.revision;
           }
           for (const sv of result.serverVersions) {
-            // Un administrador corrigió la partida: la versión del servidor reemplaza la local.
-            const { totals: _t, ...game } = sv;
+            // Un administrador corrigió (o restauró) la partida: la versión del servidor reemplaza la local.
+            const { totals: _t, deletedAt: _d, ownerUserId: _o, ...game } = sv;
             const corrected: Game = { ...game, adminLocked: true };
             await repo.saveGame(corrected);
-            games = games.map((g) => (g.id === corrected.id ? corrected : g));
+            games = games.some((g) => g.id === corrected.id) ? games.map((g) => (g.id === corrected.id ? corrected : g)) : [...games, corrected];
             synced[corrected.id] = corrected.revision;
           }
           let currentGameId = cur.currentGameId;
@@ -206,9 +236,38 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
             const local = cur.tournaments.find((t) => t.id === a.id);
             if (local && local.revision === tSent.get(a.id)) tSynced[a.id] = local.revision;
           }
+          // Torneos corregidos o creados desde el panel: la versión del servidor reemplaza la local.
+          // Sus jugadores se vinculan por nombre con el registro del dispositivo.
+          let tournaments = cur.tournaments;
+          let registry = cur.players;
+          for (const st of result.serverTournaments ?? []) {
+            const names = st.entrants.flatMap((e) => e.players.map((p) => p.name));
+            const resolved = resolvePlayers(registry, names, now());
+            registry = resolved.registry;
+            let k = 0;
+            const adopted: Tournament = {
+              ...st,
+              entrants: st.entrants.map((e) => ({ ...e, players: e.players.map((p) => ({ name: p.name, playerId: resolved.ids[k++] })) })),
+            };
+            await repo.saveTournament(adopted);
+            tournaments = tournaments.some((t) => t.id === adopted.id)
+              ? tournaments.map((t) => (t.id === adopted.id ? adopted : t))
+              : [...tournaments, adopted];
+            tSynced[adopted.id] = adopted.revision;
+          }
+          if (registry !== cur.players) await repo.saveRegistry(registry);
           await repo.saveSyncedRevisions(synced);
           await repo.saveSyncedTournamentRevisions(tSynced);
-          commit({ ...cur, games, syncedRevisions: synced, syncedTournamentRevisions: tSynced, currentGameId });
+          commit({
+            ...cur,
+            games,
+            tournaments,
+            players: registry,
+            knownPlayers: knownNames(registry),
+            syncedRevisions: synced,
+            syncedTournamentRevisions: tSynced,
+            currentGameId,
+          });
         });
         if (result.errors.length) {
           throw new ApiError(400, `El servidor rechazó ${result.errors.length} registro(s): ${result.errors[0].error}`);
@@ -225,7 +284,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     } finally {
       syncing.current = false;
     }
-  }, [applyServerSettings, authedRequest, commit, repo, serial]);
+  }, [authedRequest, commit, repo, serial]);
 
   const scheduleSync = useCallback(() => {
     if (dataRef.current) setSync((s) => ({ ...s, pending: pendingCount(dataRef.current!) }));
@@ -243,6 +302,9 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
         if (!alive) return;
         commit(loaded);
         setSync((s) => ({ ...s, pending: pendingCount(loaded) }));
+        const cachedConfig = await repo.loadPublicConfig();
+        if (alive && cachedConfig) setPublicConfig(cachedConfig);
+        void refreshPublicConfig();
         const token = await tokenStore.get();
         if (token && loaded.settings.apiUrl) {
           tokenRef.current = token;
@@ -262,7 +324,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     return () => {
       alive = false;
     };
-  }, [clearSession, commit, repo, syncNow]);
+  }, [clearSession, commit, repo, syncNow, refreshPublicConfig]);
 
   useEffect(() => {
     const sub = AppState.addEventListener('change', (state) => {
@@ -375,8 +437,11 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           commit({ ...cur, photos, players, knownPlayers: knownNames(players) });
         }),
       user,
-      isAdmin: user?.role === 'admin',
-      serverManagedSettings,
+      isAdmin: isAdminRole(user?.role),
+      branding: publicConfig?.branding ?? DEFAULT_BRANDING,
+      defaults: gameDefaults(d?.settings ?? DEFAULT_SETTINGS, publicConfig),
+      themePending,
+      refreshPublicConfig,
       sync,
       startGame: (setup) => insertGame(buildFromSetup(setup)),
       addHand: (gameId, sideId, points, handId) =>
@@ -462,11 +527,12 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           commit({ ...dataRef.current!, settings });
         }),
       syncNow,
-      login: async (username, password) => {
+      login: async (login, password) => {
         const apiUrl = dataRef.current?.settings.apiUrl ?? '';
+        // El servidor acepta correo o nombre de usuario.
         const res = await request<{ token: string; user: User }>(apiUrl, '/auth/login', {
           method: 'POST',
-          body: { username, password },
+          body: { username: login, password },
         });
         tokenRef.current = res.token;
         await tokenStore.set(res.token);
@@ -477,7 +543,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       logout: clearSession,
       api: authedRequest,
     };
-  }, [authedRequest, clearSession, commit, data, insertGame, loadError, mutateGame, repo, serial, serverManagedSettings, sync, syncNow, user, scheduleSync]);
+  }, [authedRequest, clearSession, commit, data, insertGame, loadError, mutateGame, repo, serial, sync, syncNow, user, scheduleSync, publicConfig, themePending, refreshPublicConfig]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

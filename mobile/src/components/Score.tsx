@@ -39,7 +39,7 @@ export function ScoreCard({
   const fontSize = (compact ? [68, 68, 60, 46] : [120, 120, 88, 66])[Math.min(digits, 4) - 1];
   const content = (
     <>
-      <LinearGradient colors={[c.soft, 'rgba(10,16,52,0.2)']} style={StyleSheet.absoluteFill} />
+      <LinearGradient colors={[c.soft, colors.scoreFade]} style={StyleSheet.absoluteFill} />
       {members?.length ? (
         <View style={s.avatars}>
           <SideAvatars names={members} colorIndex={index} size={compact ? 40 : 52} />
@@ -119,7 +119,7 @@ const s = StyleSheet.create({
     padding: space.md,
     paddingTop: space.lg,
     overflow: 'hidden',
-    backgroundColor: 'rgba(10, 16, 52, 0.85)',
+    backgroundColor: colors.scoreCard,
     shadowOffset: { width: 0, height: 0 },
     alignItems: 'center',
   },
@@ -219,7 +219,7 @@ export function HandLedger({
                   onPress={() => onEdit(h.id)}
                   accessibilityRole="button"
                   accessibilityLabel={`Editar mano ${i + 1}: ${scorer?.name} ${h.points} puntos`}
-                  style={({ pressed }) => [l.rowMain, pressed && { backgroundColor: 'rgba(255,255,255,0.05)' }]}
+                  style={({ pressed }) => [l.rowMain, pressed && { backgroundColor: colors.pressed }]}
                 >
                   {row}
                 </Pressable>
@@ -256,14 +256,14 @@ export function HandLedger({
   );
 }
 
-const LINE = 'rgba(96, 124, 255, 0.38)';
+const LINE = colors.line;
 
 const l = StyleSheet.create({
   sheet: {
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.borderSoft,
-    backgroundColor: 'rgba(8, 13, 44, 0.92)',
+    backgroundColor: colors.ledger,
     paddingHorizontal: space.sm,
     overflow: 'hidden',
   },
@@ -273,7 +273,7 @@ const l = StyleSheet.create({
   rowMain: { flex: 1, flexDirection: 'row', alignItems: 'center', minHeight: 40, gap: 6 },
   num: { width: 26, color: colors.textDim, fontSize: 12, fontWeight: '600', textAlign: 'center' },
   cell: { flex: 1, textAlign: 'center', fontFamily: fonts.display, fontSize: 24 },
-  zero: { color: 'rgba(174, 182, 218, 0.45)' },
+  zero: { color: colors.textFaint },
   empty: { color: colors.textDim, fontSize: 15, textAlign: 'center', paddingVertical: space.lg, borderBottomWidth: 1, borderBottomColor: LINE },
   footer: { flexDirection: 'row', alignItems: 'flex-end', gap: 6, paddingVertical: space.md },
   totalCell: { flex: 1, flexDirection: 'row', alignItems: 'baseline', justifyContent: 'center' },

@@ -38,8 +38,11 @@ export interface Tournament {
   rounds: BracketMatch[][];
   createdAt: string;
   updatedAt: string;
-  status: 'activo' | 'cancelado';
+  /** En pausa (desde el panel): no se pueden empezar enfrentamientos nuevos. */
+  status: 'activo' | 'pausado' | 'cancelado';
   revision: number;
+  /** Revisión de la última corrección administrativa incorporada (0 = ninguna). */
+  adminRevision?: number;
 }
 
 export interface TournamentInput {
@@ -258,6 +261,7 @@ export function lockReason(t: Tournament, games: Game[], game: Game): string | n
 /** Configuración de la partida de un enfrentamiento listo para jugarse. */
 export function matchGameSetup(t: Tournament, match: ResolvedMatch, starterIndex: number | null = null): GameSetup {
   if (t.status === 'cancelado') throw new TournamentError('El torneo está cancelado.');
+  if (t.status === 'pausado') throw new TournamentError('El torneo está en pausa. El organizador debe reanudarlo para seguir jugando.');
   if (match.state !== 'listo' || !match.a || !match.b) throw new TournamentError('Este enfrentamiento todavía no se puede jugar.');
   const entrants = [match.a, match.b];
   const players = entrants.flatMap((e) => e.players);

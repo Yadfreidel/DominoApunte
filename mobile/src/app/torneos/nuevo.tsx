@@ -221,7 +221,7 @@ export default function NewTournament() {
                         onPress={() => tapPlayer(i, pos)}
                         accessibilityRole="button"
                         accessibilityLabel={selected ? `${p}, seleccionado para intercambiar` : `Intercambiar a ${p}`}
-                        style={[s.member, selected && { borderColor: colors.lime, backgroundColor: 'rgba(198,244,50,0.12)' }]}
+                        style={[s.member, selected && { borderColor: colors.lime, backgroundColor: colors.limeSoft }]}
                       >
                         <Ionicons name="swap-horizontal" size={14} color={selected ? colors.lime : colors.textDim} />
                         <Text style={s.personText}>{p}</Text>
@@ -259,7 +259,7 @@ const s = StyleSheet.create({
     borderRadius: radius.pill,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: 'rgba(8, 14, 48, 0.7)',
+    backgroundColor: colors.field,
   },
   personText: { color: colors.text, fontSize: 15, fontWeight: '600' },
   member: {

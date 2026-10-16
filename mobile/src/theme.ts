@@ -1,37 +1,23 @@
-// Paleta y tipografía tomadas del diseño de referencia "Competitivo":
-// fondo azul marino con luces de estadio, verde lima para el primer lado y morado para el segundo.
+// Paleta y tipografía. El diseño original es "Competitivo": fondo azul marino con luces de
+// estadio, verde lima para el primer lado y morado para el segundo. El administrador puede elegir
+// otro tema global (ver domain/appearance.ts); se lee al arrancar (src/bootTheme), antes de crear
+// cualquier estilo, así que todas las pantallas lo usan desde el primer cuadro y sin destellos.
+import { alpha, deriveTokens, isValidAppearance, ORIGINAL_APPEARANCE, type Appearance } from './domain/appearance.ts';
 
-export const colors = {
-  bg: '#050A24',
-  bgTop: '#0C1A5C',
-  bgMid: '#081038',
-  surface: 'rgba(16, 24, 66, 0.86)',
-  surfaceSolid: '#0E1640',
-  surfaceRaised: '#141E52',
-  border: '#28346F',
-  borderSoft: 'rgba(120, 140, 220, 0.22)',
-  text: '#FFFFFF',
-  textMuted: '#AEB6DA',
-  textDim: '#7C86B5',
-  lime: '#C6F432',
-  limeDeep: '#9BD20F',
-  onLime: '#0A1030',
-  purple: '#A06BFF',
-  purpleDeep: '#7B3FF2',
-  danger: '#FF5C7A',
-  dangerBg: 'rgba(255, 92, 122, 0.12)',
-  success: '#3BE38B',
-  warning: '#FFC145',
-  overlay: 'rgba(2, 5, 20, 0.78)',
-};
+/** Tema con el que arrancó la app (guardado en el dispositivo). */
+export const activeAppearance: Appearance = (() => {
+  const stored = (globalThis as { __DOMINO_APPEARANCE__?: unknown }).__DOMINO_APPEARANCE__;
+  return isValidAppearance(stored) ? stored : ORIGINAL_APPEARANCE;
+})();
+
+export const colors = deriveTokens(activeAppearance);
 
 /** Color de cada lado (jugador o equipo) según su posición. */
-export const sideColors = [
-  { main: colors.lime, soft: 'rgba(198, 244, 50, 0.14)', track: 'rgba(198, 244, 50, 0.18)' },
-  { main: colors.purple, soft: 'rgba(160, 107, 255, 0.16)', track: 'rgba(160, 107, 255, 0.2)' },
-  { main: '#35D6F5', soft: 'rgba(53, 214, 245, 0.14)', track: 'rgba(53, 214, 245, 0.18)' },
-  { main: '#FF9F45', soft: 'rgba(255, 159, 69, 0.14)', track: 'rgba(255, 159, 69, 0.18)' },
-];
+export const sideColors = [colors.lime, colors.purple, '#35D6F5', '#FF9F45'].map((main) => ({
+  main,
+  soft: alpha(main, main === colors.purple ? 0.16 : 0.14),
+  track: alpha(main, main === colors.purple ? 0.2 : 0.18),
+}));
 
 export const sideColor = (index: number) => sideColors[index % sideColors.length];
 

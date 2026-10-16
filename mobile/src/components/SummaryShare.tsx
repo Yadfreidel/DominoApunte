@@ -4,6 +4,7 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Game } from '@/domain/game.ts';
 import { buildSummarySvg } from '@/domain/summary.ts';
+import { useStore } from '@/state/AppStore';
 import { colors, fonts, space } from '@/theme';
 import { useDialogs } from './Dialogs';
 import { SummaryImage } from './SummaryImage';
@@ -12,7 +13,8 @@ import { SummaryImage } from './SummaryImage';
 export function SummaryShare({ game, context, onClose }: { game: Game; context?: string; onClose: () => void }) {
   const insets = useSafeAreaInsets();
   const { toast } = useDialogs();
-  const { svg, width, height } = useMemo(() => buildSummarySvg(game, { context }), [game, context]);
+  const { branding } = useStore();
+  const { svg, width, height } = useMemo(() => buildSummarySvg(game, { context, appName: branding.appName }), [game, context, branding.appName]);
   const date = (game.finishedAt ?? game.createdAt).slice(0, 10);
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>

@@ -155,7 +155,7 @@ const s = StyleSheet.create({
     borderBottomColor: colors.borderSoft,
     borderRadius: radius.sm,
   },
-  rowActive: { backgroundColor: 'rgba(198,244,50,0.08)' },
+  rowActive: { backgroundColor: colors.limeSoft },
   head: { minHeight: 34 },
   headText: { color: colors.textDim, fontSize: 11, fontWeight: '700', textTransform: 'uppercase' },
   name: { flex: 1, color: colors.text, fontSize: 15, fontWeight: '600' },

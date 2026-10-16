@@ -43,13 +43,13 @@ export function StadiumBackground() {
       {/* Haz de luz del estadio: se desvanece hacia los lados y hacia abajo. */}
       <View style={styles.beam}>
         <LinearGradient
-          colors={['rgba(120,150,255,0)', 'rgba(120,150,255,0.22)', 'rgba(120,150,255,0)']}
+          colors={[colors.glowClear, colors.glow, colors.glowClear]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
           style={StyleSheet.absoluteFill}
         />
         <LinearGradient
-          colors={['rgba(8,16,56,0)', colors.bgMid]}
+          colors={[colors.bgClear, colors.bgMid]}
           locations={[0.35, 1]}
           style={StyleSheet.absoluteFill}
         />
@@ -136,9 +136,9 @@ export function Button({
   accessibilityHint?: string;
 }) {
   const palette = {
-    primary: { bg: colors.lime, fg: colors.onLime, border: colors.lime },
+    primary: { bg: colors.button, fg: colors.onButton, border: colors.button },
     purple: { bg: colors.purpleDeep, fg: colors.text, border: colors.purple },
-    outline: { bg: 'rgba(20, 30, 82, 0.7)', fg: colors.text, border: '#3A4A9A' },
+    outline: { bg: colors.outlineBg, fg: colors.text, border: colors.borderStrong },
     ghost: { bg: 'transparent', fg: colors.textMuted, border: 'transparent' },
     danger: { bg: colors.dangerBg, fg: colors.danger, border: colors.danger },
   }[variant];
@@ -232,6 +232,8 @@ export function Field({
         placeholderTextColor={colors.textDim}
         selectionColor={colors.lime}
         style={[styles.input, error ? { borderColor: colors.danger } : null, style]}
+        // La etiqueta visible también nombra el campo para lectores de pantalla.
+        accessibilityLabel={label}
         {...props}
       />
       {error ? <ErrorText>{error}</ErrorText> : null}
@@ -412,8 +414,8 @@ export const styles = StyleSheet.create({
   beam: { position: 'absolute', top: 0, left: 0, right: 0, height: 300 },
   light: {
     position: 'absolute',
-    backgroundColor: '#E8F0FF',
-    shadowColor: '#BFD3FF',
+    backgroundColor: colors.light,
+    shadowColor: colors.lightGlow,
     shadowOpacity: 1,
     shadowOffset: { width: 0, height: 0 },
     opacity: 0.85,
@@ -455,7 +457,7 @@ export const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1.5,
     borderColor: colors.border,
-    backgroundColor: 'rgba(8, 14, 48, 0.9)',
+    backgroundColor: colors.fieldStrong,
     color: colors.text,
     fontSize: 18,
     paddingHorizontal: space.lg,
@@ -468,7 +470,7 @@ export const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1.5,
     borderColor: colors.border,
-    backgroundColor: 'rgba(8, 14, 48, 0.7)',
+    backgroundColor: colors.field,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -509,7 +511,7 @@ export const styles = StyleSheet.create({
     borderRadius: radius.md,
     gap: space.md,
   },
-  selectOptionActive: { backgroundColor: 'rgba(198, 244, 50, 0.1)' },
+  selectOptionActive: { backgroundColor: colors.limeSoft },
   selectOptionText: { color: colors.text, fontSize: 18, fontWeight: '600' },
   hint: { color: colors.textDim, fontSize: 13, marginTop: 2 },
   empty: { alignItems: 'center', gap: space.sm, paddingVertical: space.xl },
@@ -517,7 +519,7 @@ export const styles = StyleSheet.create({
     width: 64,
     height: 64,
     borderRadius: 32,
-    backgroundColor: 'rgba(198, 244, 50, 0.1)',
+    backgroundColor: colors.limeSoft,
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: space.sm,
