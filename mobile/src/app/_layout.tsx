@@ -10,6 +10,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { DialogProvider } from '@/components/Dialogs';
+import { ScreenAwake } from '@/components/ScreenAwake';
 import { Loading, StadiumBackground } from '@/components/ui';
 import { AppStoreProvider } from '@/state/AppStore';
 import { colors } from '@/theme';
@@ -32,6 +33,7 @@ export default function RootLayout() {
         </View>
       ) : (
         <AppStoreProvider>
+          <ScreenAwake />
           <DialogProvider>
             <Stack
               screenOptions={{

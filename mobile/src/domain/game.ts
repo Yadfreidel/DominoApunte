@@ -400,6 +400,62 @@ export function createRematch(game: Game, now: string, makeId: () => string = ne
   };
 }
 
+/** Revancha ya creada para una partida (la siguiente con los mismos participantes), si existe. */
+export function findRematch(games: Game[], gameId: string): Game | undefined {
+  return games.find((g) => g.rematchOf === gameId && g.status !== 'cancelada');
+}
+
+export interface VictorySummary {
+  gameId: string;
+  winnerSideId: string;
+  winnerIndex: number;
+  /** «¡Juan y Pedro ganaron!» o «¡Juan ganó!» */
+  headline: string;
+  /** Integrantes cuando la pareja tiene un nombre propio (p. ej. «Juan y Pedro»). */
+  members: string | null;
+  /** «215 puntos · ¡Se pasaron por 15 puntos!» o «¡Meta exacta: 200 puntos!» */
+  detail: string;
+  points: number;
+  target: number;
+  /** Puntos por encima de la meta (0 si llegó exacto). */
+  over: number;
+  exact: boolean;
+  scores: { sideId: string; name: string; points: number; winner: boolean }[];
+}
+
+/**
+ * Resumen de la victoria para la celebración. Es una copia: sigue mostrando el resultado final
+ * aunque después se empiece la siguiente partida con el marcador en cero.
+ */
+export function victorySummary(game: Game): VictorySummary | null {
+  if (game.status !== 'terminada' || !game.winnerSideId) return null;
+  const t = totals(game);
+  const winnerIndex = game.sides.findIndex((sd) => sd.id === game.winnerSideId);
+  const winner = game.sides[winnerIndex];
+  if (!winner) return null;
+  const members = sideLabel(game, winner);
+  const plural = winner.participantIds.length > 1;
+  const points = t[winner.id] ?? 0;
+  const over = Math.max(0, points - game.target);
+  const exact = over === 0;
+  const unit = (n: number) => (n === 1 ? 'punto' : 'puntos');
+  return {
+    gameId: game.id,
+    winnerSideId: winner.id,
+    winnerIndex,
+    headline: `¡${winner.name} ${plural ? 'ganaron' : 'ganó'}!`,
+    members: plural && members !== winner.name ? members : null,
+    detail: exact
+      ? `¡Meta exacta: ${game.target} ${unit(game.target)}!`
+      : `${points} ${unit(points)} · ¡Se ${plural ? 'pasaron' : 'pasó'} por ${over} ${unit(over)}!`,
+    points,
+    target: game.target,
+    over,
+    exact,
+    scores: game.sides.map((sd) => ({ sideId: sd.id, name: sd.name, points: t[sd.id] ?? 0, winner: sd.id === winner.id })),
+  };
+}
+
 export function sideLabel(game: Game, side: Side): string {
   if (game.mode !== 'parejas') return side.name;
   const names = side.participantIds.map((id) => game.participants.find((p) => p.id === id)?.name ?? '?');

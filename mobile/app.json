@@ -47,7 +47,15 @@
           "speechRecognitionPermission": "Permite reconocer tu voz para anotar puntos. En algunos dispositivos el audio se envía a Apple o Google para transcribirlo."
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": false,
+          "recordAudioAndroid": false
+        }
+      ],
+      "expo-asset"
     ],
     "scheme": "dominopuntos",
     "backgroundColor": "#050A24",

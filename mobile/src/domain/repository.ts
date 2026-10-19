@@ -20,6 +20,10 @@ export interface Settings {
   apiUrl: string;
   /** Muestra los sorteos sin animación. */
   reduceMotion: boolean;
+  /** Mantiene la pantalla encendida mientras la app está visible. */
+  keepAwake: boolean;
+  /** Sonido al ganar una partida (solo si el usuario lo activa). */
+  victorySound: boolean;
 }
 
 /** Borrador de la pantalla de nueva partida: conserva sorteos confirmados al recargar. */
@@ -105,6 +109,8 @@ export const DEFAULT_SETTINGS: Settings = {
   modes: { individual: true, parejas: true },
   apiUrl: '',
   reduceMotion: false,
+  keepAwake: true,
+  victorySound: false,
 };
 
 const PREFIX = 'domino:v1:';

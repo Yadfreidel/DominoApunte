@@ -459,11 +459,29 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       undoLastHand: (gameId) => mutateGame(gameId, (g, at) => G.undoLastHand(g, at)),
       removeHand: (gameId, handId) => mutateGame(gameId, (g, at) => G.removeHand(g, handId, at)),
       cancelGame: (gameId) => mutateGame(gameId, (g, at) => G.cancelGame(g, at)),
-      rematch: (gameId) => {
-        const game = dataRef.current?.games.find((g) => g.id === gameId);
-        if (!game) return Promise.reject(new G.GameError('La partida ya no existe.'));
-        return insertGame((registry) => ({ game: G.createRematch(game, now()), registry }));
-      },
+      // Idempotente: si la revancha ya existe (doble toque, fin automático de la celebración más
+      // «Jugar de nuevo», renderizados repetidos) se retoma esa misma en lugar de crear otra.
+      rematch: (gameId) =>
+        serial(async () => {
+          const cur = dataRef.current!;
+          const game = cur.games.find((g) => g.id === gameId);
+          if (!game) throw new G.GameError('La partida ya no existe.');
+          if (game.tournamentId) throw new G.GameError('Las partidas de torneo siguen el cuadro: vuelve al torneo para jugar el siguiente enfrentamiento.');
+          const existing = G.findRematch(cur.games, gameId);
+          if (existing) {
+            if (cur.currentGameId !== existing.id) {
+              await repo.setCurrent(existing.id);
+              commit({ ...dataRef.current!, currentGameId: existing.id });
+            }
+            return existing;
+          }
+          const next = G.createRematch(game, now());
+          await repo.saveGame(next);
+          await repo.setCurrent(next.id);
+          commit({ ...dataRef.current!, games: [...dataRef.current!.games, next], currentGameId: next.id });
+          scheduleSync();
+          return next;
+        }),
       resumeGame: (gameId) =>
         serial(async () => {
           await repo.setCurrent(gameId);

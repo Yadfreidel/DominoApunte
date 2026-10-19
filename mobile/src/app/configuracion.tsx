@@ -164,6 +164,20 @@ export default function SettingsScreen() {
             value={settings.reduceMotion}
             onChange={(v) => store.updateSettings({ reduceMotion: v })}
           />
+          <ToggleRow
+            label="Mantener la pantalla encendida mientras juegas"
+            value={settings.keepAwake}
+            onChange={(v) => store.updateSettings({ keepAwake: v })}
+          />
+          <ToggleRow
+            label="Sonido de victoria"
+            value={settings.victorySound}
+            onChange={(v) => store.updateSettings({ victorySound: v })}
+          />
+          <Text style={s.meta}>
+            La pantalla encendida depende del teléfono y del navegador: algunos (o el modo de ahorro de batería) no lo permiten, y
+            entonces se apaga según su ajuste habitual.
+          </Text>
         </View>
       </Card>
 

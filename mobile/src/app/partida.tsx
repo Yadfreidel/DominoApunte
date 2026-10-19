@@ -9,7 +9,8 @@ import { VoiceScoreSheet } from '@/components/VoiceScoreSheet';
 import { SummaryShare } from '@/components/SummaryShare';
 import { HandLedger, ScoreCard } from '@/components/Score';
 import { Button, Card, EmptyState, Screen } from '@/components/ui';
-import { formatDuration, gameDurationMs, newId, sideLabel, totals as computeTotals } from '@/domain/game.ts';
+import { VictoryCelebration } from '@/components/VictoryCelebration';
+import { formatDuration, gameDurationMs, newId, sideLabel, totals as computeTotals, victorySummary, type VictorySummary } from '@/domain/game.ts';
 import { findMatch, resolveTournament } from '@/domain/tournament.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, sideColor, space } from '@/theme';
@@ -30,6 +31,17 @@ export default function Scoreboard() {
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
   const goTo = useGoTo();
+  // Celebración: se dispara solo cuando esta partida pasa de «pendiente» a «terminada» con la app
+  // abierta (no al abrir una partida que ya había terminado). Guarda una copia del resultado.
+  const [seen, setSeen] = useState<{ id: string; status: string } | null>(null);
+  const [celebration, setCelebration] = useState<VictorySummary | null>(null);
+  if (game && (seen?.id !== game.id || seen.status !== game.status)) {
+    if (seen?.id === game.id && seen.status === 'pendiente' && game.status === 'terminada') {
+      setKeypad(null);
+      setCelebration(victorySummary(game));
+    }
+    setSeen({ id: game.id, status: game.status });
+  }
   const browseKey = `${game?.id}:${game?.hands.length}`;
   const browse = browseState.key === browseKey ? browseState.index : null;
   const setBrowse = (update: (b: number | null) => number | null) =>
@@ -141,7 +153,7 @@ export default function Scoreboard() {
     setBusy(true);
     try {
       await store.rematch(game.id);
-      toast('¡Revancha! Marcadores en cero.');
+      toast('¡Nueva partida! Marcadores en cero.');
     } catch (err) {
       toast(err instanceof Error ? err.message : 'No se pudo crear la revancha.', 'error');
     } finally {
@@ -260,7 +272,7 @@ export default function Scoreboard() {
                 style={{ flex: 1 }}
               />
             ) : (
-              <Button label="Revancha" icon="refresh" onPress={rematch} loading={busy} style={{ flex: 1 }} />
+              <Button label="Jugar de nuevo" icon="refresh" onPress={rematch} loading={busy} style={{ flex: 1 }} />
             )}
             <Button label="Nueva" icon="add" variant="outline" onPress={() => goTo('/nueva')} style={{ flex: 1 }} />
           </View>
@@ -298,7 +310,7 @@ export default function Scoreboard() {
             </Pressable>
           ) : (
             <View style={s.handNavCenter}>
-              <Text style={s.handNavTitle}>{pending ? `Mano ${currentNumber}` : `${handCount} manos`}</Text>
+              <Text style={s.handNavTitle}>{pending ? `Mano ${currentNumber}` : `${handCount} ${handCount === 1 ? 'mano' : 'manos'}`}</Text>
             </View>
           )}
           <Pressable
@@ -379,6 +391,26 @@ export default function Scoreboard() {
       ) : null}
 
       {shareOpen ? <SummaryShare game={game} context={context} onClose={() => setShareOpen(false)} /> : null}
+
+      {celebration ? (
+        <VictoryCelebration
+          key={celebration.gameId}
+          summary={celebration}
+          tournament={!!tournament}
+          onClose={() => setCelebration(null)}
+          onNext={async () => {
+            if (tournament) {
+              setCelebration(null);
+              goTo({ pathname: '/torneos/[id]', params: { id: tournament.id } });
+              return;
+            }
+            // Misma configuración y participantes, marcadores en cero. Si ya existía la revancha, se retoma.
+            await store.rematch(celebration.gameId);
+            setCelebration(null);
+            toast('¡Nueva partida! Marcadores en cero.');
+          }}
+        />
+      ) : null}
 
       <NumericKeypad
         key={keypad?.handId ?? 'cerrado'}
