@@ -21,9 +21,13 @@ interface Props {
   tournament: boolean;
   onNext: () => Promise<void>;
   onClose: () => void;
+  /** Racha de victorias seguidas del ganador, calculada con las partidas guardadas. */
+  streak?: number;
+  /** Abre la tarjeta del ganador para compartir (detiene la cuenta regresiva). */
+  onShare?: () => void;
 }
 
-export function VictoryCelebration({ summary, tournament, onNext, onClose }: Props) {
+export function VictoryCelebration({ summary, tournament, onNext, onClose, streak = 0, onShare }: Props) {
   const reduce = useReduceMotion();
   const { settings } = useStore();
   const [seconds, setSeconds] = useState(AUTO_SECONDS);
@@ -132,6 +136,11 @@ export function VictoryCelebration({ summary, tournament, onNext, onClose }: Pro
             <Text style={s.points}>{shown}</Text>
             <Text style={[s.detail, summary.exact && { color: colors.warning }]}>{summary.detail}</Text>
             {!summary.exact ? <Text style={s.target}>Meta: {summary.target} puntos</Text> : null}
+            {streak >= 2 ? (
+              <Text style={s.streak}>
+                {summary.members || summary.scores.find((x) => x.winner)?.name} {summary.headline.includes('ganaron') ? 'llevan' : 'lleva'} {streak} victorias seguidas
+              </Text>
+            ) : null}
           </Animated.View>
 
           <View style={s.scores} accessibilityLabel="Marcador final">
@@ -155,6 +164,18 @@ export function VictoryCelebration({ summary, tournament, onNext, onClose }: Pro
             loading={busy}
             style={{ alignSelf: 'stretch' }}
           />
+          {onShare ? (
+            <Button
+              label="Compartir victoria"
+              icon="share-social-outline"
+              variant="outline"
+              onPress={() => {
+                setPaused(true); // la siguiente partida espera mientras se comparte
+                onShare();
+              }}
+              style={{ alignSelf: 'stretch' }}
+            />
+          ) : null}
           <Text style={s.countdown}>
             {paused
               ? 'Resultado guardado en el historial.'
@@ -178,7 +199,7 @@ export function VictoryCelebration({ summary, tournament, onNext, onClose }: Pro
 }
 
 /** Lluvia de confeti con animaciones nativas (sin repintar React en cada cuadro). */
-function Confetti() {
+export function Confetti() {
   const { width, height } = useWindowDimensions();
   const [pieces] = useState(() =>
     Array.from({ length: CONFETTI }, (_, i) => ({
@@ -251,6 +272,7 @@ const s = StyleSheet.create({
   points: { color: colors.text, fontFamily: fonts.display, fontSize: 84, lineHeight: 90 },
   detail: { color: colors.lime, fontFamily: fonts.heading, fontSize: 22, textAlign: 'center' },
   target: { color: colors.textDim, fontSize: 13 },
+  streak: { color: colors.warning, fontFamily: fonts.heading, fontSize: 18, textAlign: 'center', marginTop: 2 },
   scores: { alignSelf: 'stretch', gap: 6 },
   scoreRow: {
     flexDirection: 'row',

@@ -42,6 +42,7 @@ export function AppHeader({ subtitle, title }: { subtitle?: string; title?: stri
     },
     { label: 'Historial', href: '/historial', icon: 'time-outline' },
     { label: 'Torneos', href: '/torneos', icon: 'trophy-outline' },
+    { label: 'Grupos', href: '/grupos', icon: 'people-circle-outline' },
     { label: 'Estadísticas', href: '/estadisticas', icon: 'stats-chart-outline' },
     { label: 'Rivales', href: '/rivales', icon: 'git-compare-outline' },
     { label: 'Configuración', href: '/configuracion', icon: 'settings-outline' },

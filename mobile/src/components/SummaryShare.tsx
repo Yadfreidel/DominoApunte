@@ -4,17 +4,43 @@ import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-nati
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Game } from '@/domain/game.ts';
 import { buildSummarySvg } from '@/domain/summary.ts';
+import { buildWinnerCardSvg } from '@/domain/winnerCard.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, space } from '@/theme';
 import { useDialogs } from './Dialogs';
 import { SummaryImage } from './SummaryImage';
 
-/** Ventana con la vista previa del resumen de la partida y las opciones para compartirlo. */
-export function SummaryShare({ game, context, onClose }: { game: Game; context?: string; onClose: () => void }) {
+/**
+ * Ventana con la vista previa para compartir: el resumen de la partida o la tarjeta del ganador.
+ * Siempre se genera desde la partida guardada, aunque el marcador ya se haya reiniciado.
+ * No se envía nada sin que el usuario pulse compartir o descargar.
+ */
+export function SummaryShare({
+  game,
+  context,
+  kind = 'resumen',
+  streak,
+  onClose,
+}: {
+  game: Game;
+  context?: string;
+  kind?: 'resumen' | 'victoria';
+  /** Racha calculada del ganador (solo la tarjeta del ganador la muestra). */
+  streak?: number;
+  onClose: () => void;
+}) {
   const insets = useSafeAreaInsets();
   const { toast } = useDialogs();
-  const { branding } = useStore();
-  const { svg, width, height } = useMemo(() => buildSummarySvg(game, { context, appName: branding.appName }), [game, context, branding.appName]);
+  const { branding, photoOf } = useStore();
+  const victory = kind === 'victoria';
+  const { svg, width, height } = useMemo(
+    () =>
+      (victory ? buildWinnerCardSvg(game, { appName: branding.appName, logo: branding.logo, photoOf, streak }) : null) ??
+      buildSummarySvg(game, { context, appName: branding.appName }),
+    // photoOf cambia con cada render del almacén; las fotos se leen al abrir la ventana.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [game, context, branding.appName, branding.logo, victory, streak],
+  );
   const date = (game.finishedAt ?? game.createdAt).slice(0, 10);
   return (
     <Modal visible transparent animationType="slide" onRequestClose={onClose}>
@@ -22,7 +48,7 @@ export function SummaryShare({ game, context, onClose }: { game: Game; context?:
         <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Cerrar" />
         <View style={[s.sheet, { paddingBottom: insets.bottom + space.lg }]} accessibilityViewIsModal>
           <View style={s.header}>
-            <Text style={s.title}>Compartir resumen</Text>
+            <Text style={s.title}>{victory ? 'Compartir victoria' : 'Compartir resumen'}</Text>
             <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Cerrar" hitSlop={10}>
               <Ionicons name="close" size={28} color={colors.textMuted} />
             </Pressable>
@@ -32,9 +58,9 @@ export function SummaryShare({ game, context, onClose }: { game: Game; context?:
               svg={svg}
               width={width}
               height={height}
-              fileName={`domino-resumen-${date}.png`}
-              title="Resumen de la partida"
-              onDone={(r) => toast(r === 'descargada' ? 'Imagen descargada' : 'Resumen compartido')}
+              fileName={`domino-${victory ? 'victoria' : 'resumen'}-${date}.png`}
+              title={victory ? 'Tarjeta del ganador' : 'Resumen de la partida'}
+              onDone={(r) => toast(r === 'descargada' ? 'Imagen descargada' : victory ? 'Victoria compartida' : 'Resumen compartido')}
             />
           </ScrollView>
         </View>

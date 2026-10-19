@@ -219,6 +219,7 @@ export default function SettingsScreen() {
                   {sync.lastSyncAt ? ` · última vez ${formatDateTime(sync.lastSyncAt)}` : ''}
                 </Text>
                 {sync.lastError ? <ErrorText>{sync.lastError}</ErrorText> : null}
+                {sync.lastWarning ? <Text style={s.meta}>Aviso: {sync.lastWarning}</Text> : null}
                 <Button label="Sincronizar ahora" icon="sync" variant="outline" size="sm" onPress={() => store.syncNow()} loading={sync.syncing} />
               </View>
             </View>

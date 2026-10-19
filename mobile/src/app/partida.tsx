@@ -6,11 +6,13 @@ import { AppHeader } from '@/components/AppHeader';
 import { useDialogs } from '@/components/Dialogs';
 import { NumericKeypad, type KeypadSide } from '@/components/NumericKeypad';
 import { VoiceScoreSheet } from '@/components/VoiceScoreSheet';
+import { SpectatorShare } from '@/components/SpectatorShare';
 import { SummaryShare } from '@/components/SummaryShare';
 import { HandLedger, ScoreCard } from '@/components/Score';
 import { Button, Card, EmptyState, Screen } from '@/components/ui';
 import { VictoryCelebration } from '@/components/VictoryCelebration';
-import { formatDuration, gameDurationMs, newId, sideLabel, totals as computeTotals, victorySummary, type VictorySummary } from '@/domain/game.ts';
+import { formatDuration, gameDurationMs, newId, sideLabel, totals as computeTotals, victorySummary, type Game, type VictorySummary } from '@/domain/game.ts';
+import { currentStreakOf, sideKey } from '@/domain/stats.ts';
 import { findMatch, resolveTournament } from '@/domain/tournament.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, sideColor, space } from '@/theme';
@@ -30,15 +32,19 @@ export default function Scoreboard() {
   const [busy, setBusy] = useState(false);
   const [voiceOpen, setVoiceOpen] = useState(false);
   const [shareOpen, setShareOpen] = useState(false);
+  const [bigScreenOpen, setBigScreenOpen] = useState(false);
   const goTo = useGoTo();
   // Celebración: se dispara solo cuando esta partida pasa de «pendiente» a «terminada» con la app
   // abierta (no al abrir una partida que ya había terminado). Guarda una copia del resultado.
   const [seen, setSeen] = useState<{ id: string; status: string } | null>(null);
-  const [celebration, setCelebration] = useState<VictorySummary | null>(null);
+  const [celebration, setCelebration] = useState<{ summary: VictorySummary; streak: number } | null>(null);
+  /** Partida cuya tarjeta del ganador se está compartiendo (se busca en el historial guardado). */
+  const [shareVictoryId, setShareVictoryId] = useState<string | null>(null);
   if (game && (seen?.id !== game.id || seen.status !== game.status)) {
     if (seen?.id === game.id && seen.status === 'pendiente' && game.status === 'terminada') {
       setKeypad(null);
-      setCelebration(victorySummary(game));
+      const summary = victorySummary(game);
+      if (summary) setCelebration({ summary, streak: winnerStreak(store.games, game) });
     }
     setSeen({ id: game.id, status: game.status });
   }
@@ -276,7 +282,10 @@ export default function Scoreboard() {
             )}
             <Button label="Nueva" icon="add" variant="outline" onPress={() => goTo('/nueva')} style={{ flex: 1 }} />
           </View>
-          <Button label="Compartir resumen" icon="share-social-outline" variant="outline" onPress={() => setShareOpen(true)} style={{ alignSelf: 'stretch' }} />
+          <View style={s.winnerActions}>
+            <Button label="Compartir victoria" icon="trophy-outline" variant="outline" onPress={() => setShareVictoryId(game.id)} style={{ flex: 1 }} />
+            <Button label="Resumen" icon="share-social-outline" variant="outline" onPress={() => setShareOpen(true)} style={{ flex: 1 }} />
+          </View>
         </Card>
       ) : null}
 
@@ -337,6 +346,7 @@ export default function Scoreboard() {
             onPress={() => router.push({ pathname: '/contar', params: { gameId: game.id } })}
             style={s.assistBtn}
           />
+          <Button label="Pantalla grande" icon="tv-outline" variant="outline" size="sm" onPress={() => setBigScreenOpen(true)} style={s.assistBtn} />
         </View>
       ) : null}
 
@@ -391,12 +401,23 @@ export default function Scoreboard() {
       ) : null}
 
       {shareOpen ? <SummaryShare game={game} context={context} onClose={() => setShareOpen(false)} /> : null}
+      {bigScreenOpen ? <SpectatorShare game={game} onClose={() => setBigScreenOpen(false)} /> : null}
+      {shareVictoryId && store.games.find((g) => g.id === shareVictoryId) ? (
+        <SummaryShare
+          kind="victoria"
+          game={store.games.find((g) => g.id === shareVictoryId)!}
+          streak={winnerStreak(store.games, store.games.find((g) => g.id === shareVictoryId)!)}
+          onClose={() => setShareVictoryId(null)}
+        />
+      ) : null}
 
       {celebration ? (
         <VictoryCelebration
-          key={celebration.gameId}
-          summary={celebration}
+          key={celebration.summary.gameId}
+          summary={celebration.summary}
+          streak={celebration.streak}
           tournament={!!tournament}
+          onShare={() => setShareVictoryId(celebration.summary.gameId)}
           onClose={() => setCelebration(null)}
           onNext={async () => {
             if (tournament) {
@@ -405,7 +426,7 @@ export default function Scoreboard() {
               return;
             }
             // Misma configuración y participantes, marcadores en cero. Si ya existía la revancha, se retoma.
-            await store.rematch(celebration.gameId);
+            await store.rematch(celebration.summary.gameId);
             setCelebration(null);
             toast('¡Nueva partida! Marcadores en cero.');
           }}
@@ -425,6 +446,22 @@ export default function Scoreboard() {
         onClose={() => setKeypad(null)}
       />
     </Screen>
+  );
+}
+
+/**
+ * Racha de victorias seguidas del ganador hasta esta partida (inclusive), con el mismo cálculo que
+ * Estadísticas. Se cuentan solo las partidas anteriores o iguales a esta en orden cronológico.
+ */
+function winnerStreak(games: Game[], game: Game): number {
+  const side = game.sides.find((sd) => sd.id === game.winnerSideId);
+  const key = side ? sideKey(game, side) : null;
+  if (!key || game.practice) return 0;
+  const end = game.finishedAt ?? game.createdAt;
+  return currentStreakOf(
+    games.filter((g) => g.id === game.id || (g.finishedAt ?? g.createdAt) <= end),
+    game.mode,
+    key,
   );
 }
 
@@ -479,8 +516,8 @@ const s = StyleSheet.create({
   handNavCenter: { flex: 1, alignItems: 'center', paddingHorizontal: space.sm },
   handNavTitle: { color: colors.text, fontSize: 21, fontWeight: '700' },
   handNavDetail: { fontSize: 12, fontWeight: '600' },
-  assist: { flexDirection: 'row', gap: space.sm },
-  assistBtn: { flex: 1 },
+  assist: { flexDirection: 'row', gap: space.sm, flexWrap: 'wrap' },
+  assistBtn: { flexGrow: 1, flexBasis: 100 },
   tapHint: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingHorizontal: space.md },
   tapHintText: { color: colors.textMuted, fontSize: 14, textAlign: 'center', flexShrink: 1 },
   historyHeader: { flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between', flexWrap: 'wrap', gap: space.sm, marginTop: space.sm },

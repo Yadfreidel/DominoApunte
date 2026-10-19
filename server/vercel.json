@@ -11,5 +11,11 @@
       "source": "/(.*)",
       "destination": "/api"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/seasons",
+      "schedule": "0 9 * * *"
+    }
   ]
 }

@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import cors from 'cors';
 import express from 'express';
 import { registerAdminRoutes } from './admin.js';
+import { registerGroupRoutes, resolveAssociation } from './groups.js';
 import {
   ADMIN_ROLES,
   authenticate,
@@ -120,6 +121,8 @@ export function validateIncomingGame(g) {
     tournamentId: typeof g.tournamentId === 'string' && ID_RE.test(g.tournamentId) ? g.tournamentId : null,
     matchId: typeof g.matchId === 'string' && ID_RE.test(g.matchId) ? g.matchId : null,
     rules: cleanRules(g.rules),
+    groupId: typeof g.groupId === 'string' && ID_RE.test(g.groupId) ? g.groupId : null,
+    seasonId: typeof g.seasonId === 'string' && ID_RE.test(g.seasonId) ? g.seasonId : null,
   };
 }
 
@@ -198,6 +201,8 @@ export function createApp({
   visionAnalyzer = createDominoAnalyzer(),
   mailer = createMailer(),
   trustProxy = 'loopback',
+  /** Reloj inyectable para las pruebas (por defecto, la hora real). */
+  clock = () => new Date().toISOString(),
 }) {
   if (!jwtSecret || jwtSecret.length < 32) {
     throw new Error('JWT_SECRET es obligatorio y debe tener al menos 32 caracteres.');
@@ -220,7 +225,7 @@ export function createApp({
   const auth = authenticate(db, jwtSecret);
   const limiter = createLoginLimiter();
   const recoveryLimiter = createLoginLimiter({ maxAttempts: 5, windowMs: 60 * 60 * 1000 });
-  const now = () => new Date().toISOString();
+  const now = clock;
   const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 
   // ---------- Consultas reutilizables ----------
@@ -288,6 +293,8 @@ export function createApp({
       tournamentId: row.tournament_id ?? null,
       matchId: row.match_id ?? null,
       rules: row.rules_json ? JSON.parse(row.rules_json) : null,
+      groupId: row.group_id ?? null,
+      seasonId: row.season_id ?? null,
       deletedAt: row.deleted_at ?? null,
       ownerUserId: row.source_user_id ?? null,
     };
@@ -354,8 +361,8 @@ export function createApp({
     await t.run(
       `INSERT INTO domino.games (id, created_at, updated_at, finished_at, status, mode, target, participants_json, sides_json,
                                  winner_side_id, rematch_of, revision, admin_revision, source_user_id,
-                                 practice, starter_participant_id, tournament_id, match_id, rules_json)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+                                 practice, starter_participant_id, tournament_id, match_id, rules_json, group_id, season_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
        ON CONFLICT (id) DO UPDATE SET
          updated_at = excluded.updated_at, finished_at = excluded.finished_at, status = excluded.status,
          mode = excluded.mode, target = excluded.target, participants_json = excluded.participants_json,
@@ -383,6 +390,10 @@ export function createApp({
         game.tournamentId ?? null,
         game.matchId ?? null,
         game.rules ? JSON.stringify(game.rules) : null,
+        // Grupo y temporada solo se fijan al crear la partida en el servidor (no cambian después:
+        // así una partida no se cuenta en dos temporadas ni se mueve de una a otra).
+        game.groupId ?? null,
+        game.seasonId ?? null,
       ],
     );
     await t.run('DELETE FROM domino.hands WHERE game_id = $1', [game.id]);
@@ -564,6 +575,7 @@ export function createApp({
     const serverVersionIds = [];
     const deleted = [];
     const errors = [];
+    const warnings = [];
     const acceptedTournaments = [];
     const serverTournamentIds = [];
     for (const raw of incomingTournaments) {
@@ -616,7 +628,7 @@ export function createApp({
       const outcome = await db.tx(async (t) => {
         if (await t.get('SELECT 1 AS x FROM domino.deleted_games WHERE id = $1', [game.id])) return 'deleted';
         const existing = await t.get(
-          'SELECT revision, admin_revision, source_user_id, deleted_at FROM domino.games WHERE id = $1 FOR UPDATE',
+          'SELECT revision, admin_revision, source_user_id, deleted_at, group_id, season_id FROM domino.games WHERE id = $1 FOR UPDATE',
           [game.id],
         );
         if (existing?.deleted_at) return 'deleted';
@@ -631,13 +643,24 @@ export function createApp({
           return 'server';
         }
         if (existing && existing.revision >= game.revision) return { revision: existing.revision };
+        let warning = null;
+        if (existing) {
+          game.groupId = existing.group_id ?? null;
+          game.seasonId = existing.season_id ?? null;
+        } else {
+          const assoc = await resolveAssociation(t, req.user, game, now());
+          game.groupId = assoc.groupId;
+          game.seasonId = assoc.seasonId;
+          warning = assoc.warning;
+        }
         const normalized = recompute(game, game.hands, game.updatedAt);
         await writeGame(t, normalized, {
           adminRevision: existing?.admin_revision ?? 0,
           sourceUserId: existing ? existing.source_user_id : req.user.id,
         });
-        return { revision: game.revision };
+        return { revision: game.revision, warning, groupId: game.groupId, seasonId: game.seasonId };
       });
+      if (outcome?.warning) warnings.push({ id: game.id, warning: outcome.warning, groupId: outcome.groupId, seasonId: outcome.seasonId });
       if (outcome === 'deleted') deleted.push(game.id);
       else if (outcome === 'server') serverVersionIds.push(game.id);
       else if (outcome === 'forbidden') errors.push({ id: game.id, error: 'No puedes modificar una partida registrada por otra cuenta.' });
@@ -705,7 +728,7 @@ export function createApp({
     const serverTournaments = tIds.length
       ? (await db.all('SELECT * FROM domino.tournaments WHERE id = ANY($1::text[])', [tIds])).map(rowToTournament)
       : [];
-    res.json({ accepted, serverVersions, deleted, errors, acceptedTournaments, serverTournaments });
+    res.json({ accepted, serverVersions, deleted, errors, warnings, acceptedTournaments, serverTournaments });
   });
 
   // ---------- Conteo de fichas con cámara ----------
@@ -767,6 +790,9 @@ export function createApp({
     withLockedGame,
   });
   app.use('/api/admin', admin);
+
+  // ---------- Grupos, temporadas y pantalla grande ----------
+  registerGroupRoutes(app, { db, now, auth, loadGames });
 
   app.use('/api', (req, res) => res.status(404).json({ error: 'Ruta no encontrada.' }));
 

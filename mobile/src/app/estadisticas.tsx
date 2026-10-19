@@ -5,7 +5,7 @@ import { AppHeader } from '@/components/AppHeader';
 import { DateFilter, type DateRange } from '@/components/DateFilter';
 import { Button, Card, EmptyState, Pill, Screen, Stat } from '@/components/ui';
 import { filterGames, isCountable, type Mode } from '@/domain/game.ts';
-import { computePersonStats, type PersonStats } from '@/domain/stats.ts';
+import { computePersonStats, computeTeamStats, type PersonStats } from '@/domain/stats.ts';
 import { useGoTo } from '@/navigation';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, space } from '@/theme';
@@ -17,15 +17,17 @@ export default function Stats() {
   const goTo = useGoTo();
   const [range, setRange] = useState<DateRange>({});
   const [mode, setMode] = useState<Mode>('individual');
+  /** Pestaña: personas por modalidad, o parejas fijas (la pareja como unidad). */
+  const [teams, setTeams] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
 
   const filtered = useMemo(() => filterGames(games, range), [games, range]);
   const stats = useMemo(() => computePersonStats(filtered, players), [filtered, players]);
+  const teamRows = useMemo(() => computeTeamStats(filtered, players), [filtered, players]);
   const valid = filtered.filter((g) => isCountable(g) && g.mode === mode);
   const excluded = filtered.filter((g) => g.mode === mode && !isCountable(g)).length;
   const rows = stats[mode];
   const person = rows.find((p) => p.key === selected);
-  const avgLabel = 'Prom.';
 
   return (
     <Screen header={<AppHeader subtitle="Estadísticas" />}>
@@ -43,14 +45,25 @@ export default function Stats() {
               <Pill
                 key={m}
                 label={m === 'individual' ? 'Individual' : 'Por parejas'}
-                active={mode === m}
+                active={!teams && mode === m}
                 color={m === 'individual' ? colors.lime : colors.purple}
                 onPress={() => {
                   setMode(m);
+                  setTeams(false);
                   setSelected(null);
                 }}
               />
             ))}
+            <Pill
+              label="Parejas fijas"
+              active={teams}
+              color={colors.warning}
+              onPress={() => {
+                setMode('parejas');
+                setTeams(true);
+                setSelected(null);
+              }}
+            />
           </View>
           <Card>
             <DateFilter onChange={setRange} />
@@ -61,9 +74,47 @@ export default function Stats() {
             <Stat label="Manos" value={valid.reduce((n, g) => n + g.hands.length, 0)} color={colors.purple} />
           </Card>
 
-          {person ? <PersonCard person={person} mode={mode} onClose={() => setSelected(null)} /> : null}
+          {!teams && person ? <PersonCard person={person} mode={mode} onClose={() => setSelected(null)} /> : null}
 
-          {rows.length === 0 ? (
+          {teams ? (
+            teamRows.length === 0 ? (
+              <EmptyState icon="people-outline" title="Sin parejas todavía" message="No hay partidas por parejas terminadas en este periodo." />
+            ) : (
+              <Card style={{ paddingHorizontal: space.sm }}>
+                <View style={[s.row, s.head]}>
+                  <Text style={[s.name, s.headText]}>Pareja</Text>
+                  <Text style={[s.num, s.headText]}>PJ</Text>
+                  <Text style={[s.num, s.headText]}>G</Text>
+                  <Text style={[s.num, s.headText]}>P</Text>
+                  <Text style={[s.pct, s.headText]}>%</Text>
+                  <Text style={[s.num, s.headText]}>Act.</Text>
+                  <Text style={[s.streak, s.headText]}>Mejor</Text>
+                </View>
+                {teamRows.map((t) => (
+                  <View
+                    key={t.key}
+                    style={s.row}
+                    accessible
+                    accessibilityLabel={`${t.name}: ${t.played} jugadas, ${t.wins} ganadas, racha actual ${t.currentStreak}, mejor racha ${t.bestStreak}`}
+                  >
+                    <Text style={s.name} numberOfLines={2}>
+                      {t.name}
+                    </Text>
+                    <Text style={s.num}>{t.played}</Text>
+                    <Text style={[s.num, { color: colors.lime }]}>{t.wins}</Text>
+                    <Text style={[s.num, { color: colors.danger }]}>{t.losses}</Text>
+                    <Text style={s.pct}>{fmt(t.winRate, '%')}</Text>
+                    <Text style={[s.num, { color: t.currentStreak >= 2 ? colors.warning : colors.text }]}>{t.currentStreak}</Text>
+                    <Text style={[s.streak, { color: colors.warning }]}>{t.bestStreak}</Text>
+                  </View>
+                ))}
+                <Text style={s.legend}>
+                  Cada pareja se reconoce por sus dos integrantes, aunque cambie el orden o el nombre del equipo. Act.: victorias seguidas
+                  hasta hoy · Mejor: mejor racha.
+                </Text>
+              </Card>
+            )
+          ) : rows.length === 0 ? (
             <EmptyState
               icon="podium-outline"
               title="Sin partidas válidas"
@@ -77,10 +128,8 @@ export default function Stats() {
                 <Text style={[s.num, s.headText]}>G</Text>
                 <Text style={[s.num, s.headText]}>P</Text>
                 <Text style={[s.pct, s.headText]}>%</Text>
-                <Text style={[s.avg, s.headText]} numberOfLines={1}>
-                  {avgLabel}
-                </Text>
-                <Text style={[s.streak, s.headText]}>Racha</Text>
+                <Text style={[s.num, s.headText]}>Act.</Text>
+                <Text style={[s.streak, s.headText]}>Mejor</Text>
               </View>
               {rows.map((r) => (
                 <Pressable
@@ -97,18 +146,18 @@ export default function Stats() {
                   <Text style={[s.num, { color: colors.lime }]}>{r.wins}</Text>
                   <Text style={[s.num, { color: colors.danger }]}>{r.losses}</Text>
                   <Text style={s.pct}>{fmt(r.winRate, '%')}</Text>
-                  <Text style={s.avg}>{fmt(r.avgPoints)}</Text>
+                  <Text style={[s.num, { color: r.currentStreak >= 2 ? colors.warning : colors.text }]}>{r.currentStreak}</Text>
                   <Text style={[s.streak, { color: colors.warning }]}>{r.bestStreak}</Text>
                 </Pressable>
               ))}
               <Text style={s.legend}>
-                PJ: jugadas · G: ganadas · P: perdidas · Prom.: {mode === 'parejas' ? 'puntos de su equipo' : 'puntos'} por partida · Racha: mejor racha de victorias seguidas.
+                PJ: jugadas · G: ganadas · P: perdidas · Act.: victorias seguidas hasta hoy · Mejor: mejor racha. Toca un nombre para ver su promedio de {mode === 'parejas' ? 'puntos de su equipo' : 'puntos'} por partida.
                 {mode === 'parejas' ? ' En parejas el resultado cuenta para ambos integrantes y el promedio son los puntos de su equipo.' : ''}
               </Text>
             </Card>
           )}
           <Text style={s.note}>
-            Solo cuentan partidas terminadas. No cuentan canceladas, pendientes, de práctica ni pases automáticos de torneo
+            Solo cuentan partidas terminadas. Una derrota corta la racha; no cuentan canceladas, pendientes, de práctica ni pases automáticos de torneo
             {excluded ? ` (${excluded} sin contar en este periodo)` : ''}.
           </Text>
         </>
@@ -136,6 +185,7 @@ function PersonCard({ person, mode, onClose }: { person: PersonStats; mode: Mode
           label={mode === 'parejas' ? 'Promedio de puntos de su equipo por partida' : 'Promedio de puntos por partida'}
           value={fmt(person.avgPoints)}
         />
+        <Stat label="Racha actual" value={person.currentStreak} color={colors.warning} />
         <Stat label="Mejor racha" value={person.bestStreak} color={colors.warning} />
       </View>
     </Card>

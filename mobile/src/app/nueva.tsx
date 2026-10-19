@@ -6,6 +6,9 @@ import { AppHeader } from '@/components/AppHeader';
 import { Avatar, PlayerPhotoButton, type VersusSide } from '@/components/Avatar';
 import { Disclosure } from '@/components/Disclosure';
 import { VersusShowdown } from '@/components/Versus';
+import { matchupNote } from '@/domain/stats.ts';
+import { useAdminQuery } from '@/components/admin/useAdminQuery';
+import type { GroupSummary } from '@/domain/groups.ts';
 import { useDialogs } from '@/components/Dialogs';
 import { StarterDraw } from '@/components/StarterDraw';
 import { Button, Card, ErrorText, Field, Label, Loading, Pill, Screen, Select, type IconName } from '@/components/ui';
@@ -34,6 +37,10 @@ export default function NewGame() {
   const [starterIndex, setStarterIndex] = useState<number | null>(null);
   const [practice, setPractice] = useState(false);
   const [targetPick, setTargetChoice] = useState<number | 'otra'>(defaults.defaultTarget);
+  // Grupo y temporada (opcionales; requieren sesión). Las partidas sueltas no los necesitan.
+  const groupsQ = useAdminQuery<{ groups: GroupSummary[] }>(store.user ? '/groups' : null);
+  const [groupId, setGroupId] = useState<string>('');
+  const [seasonChoice, setSeasonChoice] = useState<string>('');
   // Campos que el usuario (o su borrador) ya eligió: las sugerencias del organizador no los pisan.
   const [touched, setTouched] = useState({ mode: false, target: false, pass: false });
   const touch = (field: 'mode' | 'target' | 'pass') => setTouched((t) => (t[field] ? t : { ...t, [field]: true }));
@@ -130,6 +137,15 @@ export default function NewGame() {
         }))
       : effectiveNames.map((n, i) => ({ name: n.trim() || `Jugador ${i + 1}`, members: n.trim() ? [n.trim()] : [] }));
 
+  // Historial entre estos rivales (solo si ya jugaron entre sí con estos mismos nombres registrados).
+  const rivalNote = matchupNote(
+    store.games,
+    mode,
+    versus.map((v) => v.members),
+    store.players,
+    versus.map((v) => v.name),
+  );
+
   const chooseMode = (m: Mode) => {
     touch('mode');
     setModeChoice(m);
@@ -170,6 +186,14 @@ export default function NewGame() {
     }
   };
 
+  const groups = groupsQ.data?.groups ?? [];
+  const group = groups.find((g) => g.id === groupId) ?? null;
+  // Solo temporadas en curso que admiten esta modalidad.
+  const seasonsForMode = (group?.seasons ?? []).filter(
+    (x) => x.status === 'activa' && x.modes.includes(mode) && (x.ranking !== 'parejas' || mode === 'parejas'),
+  );
+  const season = seasonsForMode.find((x) => x.id === seasonChoice) ?? null;
+
   const start = async () => {
     if (!target.ok) return setError(target.error);
     if (!pass.ok) return setError(`Puntos por pase: ${pass.error}`);
@@ -182,6 +206,8 @@ export default function NewGame() {
       practice,
       starterIndex: starter,
       rules: pass.value > 0 ? { passPoints: pass.value } : null,
+      groupId: group ? group.id : null,
+      seasonId: group && season ? season.id : null,
     };
     const problem = validateSetup(setup);
     if (problem) return setError(problem);
@@ -347,6 +373,12 @@ export default function NewGame() {
 
       {/* Cara a cara */}
       <VersusShowdown sides={versus} />
+      {rivalNote ? (
+        <View style={s.rivalNote} accessibilityLiveRegion="polite">
+          <Ionicons name="flame-outline" size={18} color={colors.warning} />
+          <Text style={s.rivalText}>{rivalNote}</Text>
+        </View>
+      ) : null}
 
       {/* Meta: desplegable */}
       <Disclosure icon="flag-outline" title="Meta por partida" value={target.ok ? `${target.value} puntos` : 'Elige una meta'}>
@@ -386,6 +418,41 @@ export default function NewGame() {
           />
         ) : null}
       </Disclosure>
+
+      {store.user && groups.length ? (
+        <Disclosure
+          icon="people-circle-outline"
+          title="Grupo y temporada"
+          value={group ? (season ? `${group.name} · ${season.name}` : group.name) : 'Sin grupo'}
+          accent={colors.purple}
+        >
+          <Select
+            label="Grupo"
+            value={groupId}
+            onChange={(v) => {
+              setGroupId(v);
+              setSeasonChoice('');
+            }}
+            options={[{ value: '', label: 'Sin grupo (partida suelta)' }, ...groups.map((g) => ({ value: g.id, label: g.name }))]}
+          />
+          {group ? (
+            seasonsForMode.length ? (
+              <Select
+                label="Temporada"
+                value={season ? season.id : ''}
+                onChange={setSeasonChoice}
+                options={[{ value: '', label: 'No contar para una temporada' }, ...seasonsForMode.map((x) => ({ value: x.id, label: x.name }))]}
+              />
+            ) : (
+              <Text style={s.cardHint}>No hay una temporada en curso que admita partidas {mode === 'parejas' ? 'por parejas' : 'individuales'}.</Text>
+            )
+          ) : null}
+          <Text style={s.cardHint}>
+            La partida contará en las estadísticas del grupo{season ? ' y en la clasificación de la temporada' : ''}. Se confirma al sincronizar;
+            {practice ? ' las de práctica no cuentan para temporadas.' : ' después no se puede cambiar.'}
+          </Text>
+        </Disclosure>
+      ) : null}
 
       {/* Opciones poco frecuentes: quién sale, penalización por pase y práctica */}
       <Disclosure icon="options-outline" title="Más opciones" value={moreSummary} accent={colors.purple}>
@@ -541,5 +608,7 @@ const s = StyleSheet.create({
   resumeText: { color: colors.textMuted, fontSize: 14 },
   footnote: { color: colors.textDim, fontSize: 13, textAlign: 'center' },
   welcome: { paddingVertical: space.md },
+  rivalNote: { flexDirection: 'row', alignItems: 'center', gap: space.sm, paddingHorizontal: space.md, marginTop: -space.xs },
+  rivalText: { color: colors.text, fontSize: 14, flex: 1 },
   welcomeText: { color: colors.text, fontSize: 15, lineHeight: 21, textAlign: 'center' },
 });

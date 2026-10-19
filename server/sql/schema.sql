@@ -191,6 +191,84 @@ CREATE TRIGGER corrections_inmutables BEFORE UPDATE OR DELETE ON domino.correcti
   FOR EACH ROW EXECUTE FUNCTION domino.corrections_inmutables();
 CREATE INDEX IF NOT EXISTS corrections_created_idx ON domino.corrections (created_at);
 
+-- ---------------------------------------------------------------------
+-- Migración 2026-12 (idempotente, no borra datos): grupos de juego, temporadas y pantalla grande.
+-- Las partidas anteriores quedan sin grupo ni temporada (no se incorporan automáticamente).
+-- ---------------------------------------------------------------------
+
+-- Grupos privados («Dominó de los viernes»). Sus integrantes son cuentas de acceso.
+CREATE TABLE IF NOT EXISTS domino.groups (
+  id           TEXT    PRIMARY KEY,
+  name         TEXT    NOT NULL,
+  description  TEXT    NOT NULL DEFAULT '',
+  photo        TEXT,
+  timezone     TEXT    NOT NULL,
+  created_at   TEXT    NOT NULL,
+  created_by   INTEGER REFERENCES domino.users (id) ON DELETE SET NULL,
+  archived_at  TEXT
+);
+
+-- Roles dentro del grupo; no dan permisos globales en la app.
+CREATE TABLE IF NOT EXISTS domino.group_members (
+  group_id   TEXT    NOT NULL REFERENCES domino.groups (id) ON DELETE CASCADE,
+  user_id    INTEGER NOT NULL REFERENCES domino.users (id) ON DELETE CASCADE,
+  role       TEXT    NOT NULL CHECK (role IN ('propietario', 'admin', 'miembro')),
+  joined_at  TEXT    NOT NULL,
+  PRIMARY KEY (group_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS group_members_user_idx ON domino.group_members (user_id);
+
+-- Invitaciones por código o enlace: solo se guarda el hash del código; se pueden revocar.
+CREATE TABLE IF NOT EXISTS domino.group_invites (
+  id          TEXT    PRIMARY KEY,
+  group_id    TEXT    NOT NULL REFERENCES domino.groups (id) ON DELETE CASCADE,
+  code_hash   TEXT    NOT NULL UNIQUE,
+  created_by  INTEGER REFERENCES domino.users (id) ON DELETE SET NULL,
+  created_at  TEXT    NOT NULL,
+  expires_at  TEXT    NOT NULL,
+  revoked_at  TEXT,
+  uses        INTEGER NOT NULL DEFAULT 0,
+  max_uses    INTEGER
+);
+CREATE INDEX IF NOT EXISTS group_invites_group_idx ON domino.group_invites (group_id);
+
+-- Temporadas de un grupo. La clasificación se calcula desde las partidas asociadas;
+-- final_json guarda el resultado definitivo al finalizar (y se actualiza si hay correcciones).
+CREATE TABLE IF NOT EXISTS domino.seasons (
+  id            TEXT    PRIMARY KEY,
+  group_id      TEXT    NOT NULL REFERENCES domino.groups (id) ON DELETE CASCADE,
+  name          TEXT    NOT NULL,
+  starts_on     TEXT    NOT NULL,
+  ends_on       TEXT    NOT NULL,
+  timezone      TEXT    NOT NULL,
+  modes_json    TEXT    NOT NULL,
+  ranking       TEXT    NOT NULL CHECK (ranking IN ('individual', 'parejas')),
+  rules_json    TEXT    NOT NULL,
+  created_at    TEXT    NOT NULL,
+  created_by    INTEGER REFERENCES domino.users (id) ON DELETE SET NULL,
+  cancelled_at  TEXT,
+  finalized_at  TEXT,
+  final_json    TEXT,
+  CHECK (ends_on >= starts_on)
+);
+CREATE INDEX IF NOT EXISTS seasons_group_idx ON domino.seasons (group_id);
+
+-- Asociación explícita de cada partida con un grupo y, opcionalmente, una temporada (una sola).
+ALTER TABLE domino.games ADD COLUMN IF NOT EXISTS group_id TEXT;
+ALTER TABLE domino.games ADD COLUMN IF NOT EXISTS season_id TEXT;
+CREATE INDEX IF NOT EXISTS games_group_idx ON domino.games (group_id) WHERE group_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS games_season_idx ON domino.games (season_id) WHERE season_id IS NOT NULL;
+
+-- Pantalla grande: enlaces de espectador de solo lectura para una partida (hash del token, revocables).
+CREATE TABLE IF NOT EXISTS domino.spectator_links (
+  token_hash  TEXT    PRIMARY KEY,
+  game_id     TEXT    NOT NULL,
+  created_by  INTEGER REFERENCES domino.users (id) ON DELETE SET NULL,
+  created_at  TEXT    NOT NULL,
+  revoked_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS spectator_links_game_idx ON domino.spectator_links (game_id);
+
 -- Seguridad adicional: RLS activado sin políticas. El servidor se conecta como
 -- dueño de las tablas y no se ve afectado; cualquier otro rol queda bloqueado.
 ALTER TABLE domino.users         ENABLE ROW LEVEL SECURITY;
@@ -204,3 +282,8 @@ ALTER TABLE domino.settings      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domino.tournaments   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domino.password_resets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE domino.player_aliases  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE domino.groups          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE domino.group_members   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE domino.group_invites   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE domino.seasons         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE domino.spectator_links ENABLE ROW LEVEL SECURITY;

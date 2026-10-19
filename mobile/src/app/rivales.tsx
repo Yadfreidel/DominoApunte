@@ -6,7 +6,7 @@ import { AppHeader } from '@/components/AppHeader';
 import { formatDateTime } from '@/components/GameSummary';
 import { Card, EmptyState, Pill, Screen, Select } from '@/components/ui';
 import type { Mode } from '@/domain/game.ts';
-import { headToHead, rivalOptions } from '@/domain/stats.ts';
+import { headToHead, rivalOptions, rivalrySummary } from '@/domain/stats.ts';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, space } from '@/theme';
 
@@ -20,6 +20,7 @@ export default function Rivals() {
   const labelOf = (key: string) => options.find((o) => o.key === key)?.label ?? '';
   const ready = !!a && !!b && a !== b;
   const result = useMemo(() => (ready ? headToHead(games, mode, a, b) : null), [ready, games, mode, a, b]);
+  const rivalry = result ? rivalrySummary(result, labelOf(a), labelOf(b), mode === 'parejas') : null;
   const unit = mode === 'parejas' ? 'pareja' : 'jugador';
 
   const changeMode = (m: Mode) => {
@@ -86,6 +87,27 @@ export default function Rivals() {
                   </Text>
                 </View>
               </Card>
+              {rivalry?.messages.length ? (
+                <Card style={{ gap: 6 }}>
+                  {rivalry.messages.map((m) => (
+                    <View key={m} style={s.msgRow}>
+                      <Ionicons name="flame-outline" size={18} color={colors.warning} />
+                      <Text style={s.msg}>{m}</Text>
+                    </View>
+                  ))}
+                  {rivalry.recent.length ? (
+                    <View style={s.msgRow} accessible accessibilityLabel={`Últimos resultados: ${rivalry.recent.map((w) => (w === 'a' ? labelOf(a) : w === 'b' ? labelOf(b) : 'otro')).join(', ')}`}>
+                      <Text style={s.small}>Últimos:</Text>
+                      {rivalry.recent.map((w, i) => (
+                        <View key={i} style={[s.dot, { backgroundColor: w === 'a' ? colors.lime : w === 'b' ? colors.purple : colors.textDim }]}>
+                          <Text style={s.dotText}>{w === 'a' ? '1' : w === 'b' ? '2' : '–'}</Text>
+                        </View>
+                      ))}
+                      <Text style={s.small}>(1: {labelOf(a)} · 2: {labelOf(b)})</Text>
+                    </View>
+                  ) : null}
+                </Card>
+              ) : null}
               <Text style={s.muted}>
                 {result.encounters.length} {result.encounters.length === 1 ? 'enfrentamiento' : 'enfrentamientos'}
                 {result.others ? ` · ${result.others} ganados por otro jugador` : ''}
@@ -123,7 +145,10 @@ export default function Rivals() {
           ) : null}
         </>
       )}
-      <Text style={s.note}>Solo cuentan partidas terminadas que no sean de práctica.</Text>
+      <Text style={s.note}>
+        Solo cuentan partidas terminadas que no sean de práctica, de la misma modalidad. Las metas pueden variar entre partidas: se
+        indican en cada resultado.
+      </Text>
     </Screen>
   );
 }
@@ -142,4 +167,8 @@ const s = StyleSheet.create({
   small: { color: colors.textDim, fontSize: 12 },
   result: { fontFamily: fonts.display, fontSize: 24 },
   note: { color: colors.textDim, fontSize: 12, textAlign: 'center' },
+  msgRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  msg: { color: colors.text, fontSize: 15, flex: 1 },
+  dot: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+  dotText: { color: colors.onLime, fontSize: 12, fontWeight: '800' },
 });

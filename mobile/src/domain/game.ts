@@ -60,6 +60,9 @@ export interface Game {
    * del organizador no modifica partidas existentes ni en curso.
    */
   rules?: GameRules | null;
+  /** Grupo de juego y temporada a los que se asoció la partida antes de empezar (opcionales). */
+  groupId?: string | null;
+  seasonId?: string | null;
 }
 
 export interface GameRules {
@@ -88,6 +91,9 @@ export interface GameSetup {
   /** Partida de torneo: torneo, enfrentamiento y participante del cuadro de cada lado. */
   tournament?: { tournamentId: string; matchId: string; entrantIds: string[] };
   rules?: GameRules | null;
+  /** Asociación opcional con un grupo y una temporada (el servidor la valida al sincronizar). */
+  groupId?: string | null;
+  seasonId?: string | null;
 }
 
 export const MIN_PLAYERS = 2;
@@ -236,6 +242,8 @@ export function createGame(setup: GameSetup, now: string, makeId: () => string =
     tournamentId: setup.tournament?.tournamentId ?? null,
     matchId: setup.tournament?.matchId ?? null,
     rules: setup.rules ? { passPoints: setup.rules.passPoints } : null,
+    groupId: setup.groupId ?? null,
+    seasonId: setup.groupId ? (setup.seasonId ?? null) : null,
   };
 }
 
@@ -397,6 +405,9 @@ export function createRematch(game: Game, now: string, makeId: () => string = ne
     tournamentId: null,
     matchId: null,
     rules: game.rules ? { ...game.rules } : null,
+    // Mismo grupo y temporada (el servidor vuelve a validar que la temporada siga admitiendo partidas).
+    groupId: game.groupId ?? null,
+    seasonId: game.seasonId ?? null,
   };
 }
 

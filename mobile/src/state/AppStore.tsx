@@ -32,6 +32,8 @@ export interface SyncStatus {
   pending: number;
   lastSyncAt: string | null;
   lastError: string | null;
+  /** Aviso del servidor (p. ej. una partida que no se pudo asociar a una temporada). */
+  lastWarning?: string | null;
 }
 
 interface StoreValue {
@@ -198,6 +200,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           errors: { id: string | null; error: string }[];
           acceptedTournaments?: { id: string }[];
           serverTournaments?: Tournament[];
+          warnings?: { id: string; warning: string; groupId: string | null; seasonId: string | null }[];
         }>('/sync/games', {
           method: 'POST',
           // pull: el servidor entrega también lo que un administrador corrigió, restauró o creó para esta cuenta.
@@ -232,6 +235,16 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
               await repo.setCurrent(null);
             }
           }
+          // Asociación con grupo o temporada que el servidor no aceptó: la copia local se ajusta
+          // (sin cambiar la revisión, que ya está sincronizada) para no mostrar datos que no cuentan.
+          for (const w of result.warnings ?? []) {
+            const local = games.find((g) => g.id === w.id);
+            if (!local || (local.groupId === w.groupId && local.seasonId === w.seasonId)) continue;
+            const adjusted = { ...local, groupId: w.groupId, seasonId: w.seasonId };
+            await repo.saveGame(adjusted);
+            games = games.map((g) => (g.id === w.id ? adjusted : g));
+          }
+          if (result.warnings?.length) setSync((st) => ({ ...st, lastWarning: result.warnings![0].warning }));
           const tSynced = { ...cur.syncedTournamentRevisions };
           const tSent = new Map(tBatch.map((t) => [t.id, t.revision]));
           for (const a of result.acceptedTournaments ?? []) {
@@ -275,7 +288,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
           throw new ApiError(400, `El servidor rechazó ${result.errors.length} registro(s): ${result.errors[0].error}`);
         }
       }
-      setSync({ syncing: false, pending: pendingCount(dataRef.current!), lastSyncAt: now(), lastError: null });
+      setSync((st) => ({ ...st, syncing: false, pending: pendingCount(dataRef.current!), lastSyncAt: now(), lastError: null }));
     } catch (err) {
       setSync((s) => ({
         ...s,

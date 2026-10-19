@@ -21,6 +21,7 @@ export default function HistoryDetail() {
   const { toast } = useDialogs();
   const game = store.games.find((g) => g.id === id);
   const [shareOpen, setShareOpen] = useState(false);
+  const [victoryOpen, setVictoryOpen] = useState(false);
 
   if (!game) {
     return (
@@ -122,10 +123,14 @@ export default function HistoryDetail() {
       {game.status === 'terminada' && !game.tournamentId ? (
         <Button label="Jugar revancha" icon="refresh" variant="outline" onPress={rematch} />
       ) : null}
+      {game.status === 'terminada' && game.winnerSideId ? (
+        <Button label="Compartir victoria" icon="trophy-outline" variant="outline" onPress={() => setVictoryOpen(true)} />
+      ) : null}
       {game.status === 'terminada' ? (
         <Button label="Compartir resumen" icon="share-social-outline" variant="outline" onPress={() => setShareOpen(true)} />
       ) : null}
       {shareOpen ? <SummaryShare game={game} context={context} onClose={() => setShareOpen(false)} /> : null}
+      {victoryOpen ? <SummaryShare kind="victoria" game={game} onClose={() => setVictoryOpen(false)} /> : null}
     </Screen>
   );
 }

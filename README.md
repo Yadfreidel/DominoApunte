@@ -178,6 +178,48 @@ Todas las tablas nuevas tienen RLS. En Supabase, después de arrancar el servido
   ```
   `.vercelignore` impide que se suban `.env`, el certificado o datos locales.
 
+## Rachas, grupos, temporadas, pantalla grande y tarjeta del ganador
+
+| Función | Dónde aparece | Cómo funciona |
+| --- | --- | --- |
+| Rachas | Estadísticas (columnas «Act.» y «Mejor», ficha de cada jugador, pestaña «Parejas fijas»), celebración y tarjeta del ganador | Racha actual y mejor racha por jugador y por pareja. La pareja se reconoce por sus dos integrantes, sin importar el orden ni el nombre del equipo. |
+| Rivalidades | Rivales (mensajes y últimos resultados) y una nota breve en «Así se enfrentan» antes de jugar | Victorias de cada lado, total, racha dentro de la rivalidad y mensajes como «La serie está 5 a 4…; … pueden empatar». No mezcla modalidades, y cada resultado muestra su meta. |
+| Grupos | Menú → Grupos | Grupo privado con nombre, descripción e imagen opcional. Se invita con un código o un enlace que vence en 7 días y se puede revocar. Roles: propietario, administrador y miembro. Clasificación, rachas e historial del grupo. Una partida se asocia a un grupo de forma opcional en Nueva partida → «Grupo y temporada». |
+| Temporadas | Grupo → Temporadas | Nombre, fechas, zona horaria del grupo, modalidades admitidas y clasificación individual o por parejas. Las reglas se ven antes de empezar y no cambian después. Incluye clasificación con progreso, archivo de temporadas y campeón o campeones. |
+| Pantalla grande | Marcador → «Pantalla grande» | Enlace de espectador con QR para abrir en el navegador de una TV, un monitor o una tableta. Es de solo lectura y revocable. Se actualiza cada 2,5 s, indica «Sin conexión» o «Datos desactualizados» y se recupera al reconectar. Ofrece pantalla completa en la web. |
+| Tarjeta del ganador | Celebración, tarjeta final de la partida e Historial → «Compartir victoria» | Imagen PNG con vista previa: nombre de la app (y logo), ganador, fotos o iniciales, marcador final, meta, fecha, duración real y una frase. La racha aparece solo si está calculada. Se comparte con el menú del sistema o se descarga. |
+
+**Reglas de cálculo**
+- Cuentan solo las partidas terminadas, con ganador, que no son de práctica ni están en la papelera.
+- En el dominó no hay empates: cada partida válida es una victoria o una derrota, y una derrota corta la racha. Las canceladas o abandonadas no cuentan ni cortan la racha.
+- El orden es cronológico y estable (fecha de fin, fecha de inicio, identificador), sin depender del orden de sincronización.
+- Las correcciones y anulaciones recalculan todo, porque todo se deriva de las partidas guardadas.
+- En los grupos, cada persona es su perfil del servidor (identificador estable). Las fusiones de duplicados las hace el administrador en el panel; la app nunca une a dos personas por tener el mismo nombre.
+
+**Temporadas**
+- Clasificación: X puntos por victoria e Y por derrota, configurables (por defecto 3 y 0). Son puntos de clasificación, distintos de los puntos de las manos.
+- Desempates, en este orden: victorias entre los empatados, % de victorias y diferencia de puntos anotados. Si persiste el empate, comparten la posición y, si es la primera, el título (campeones compartidos).
+- Cada partida se asocia de forma explícita al crearla, y solo a una temporada; las anteriores no se incorporan.
+- El servidor valida al sincronizar que la cuenta sea integrante, que la temporada esté en curso al empezar la partida y que admita su modalidad. Si no, la guarda sin temporada y avisa.
+- **Cierre:** al pasar la fecha final no se aceptan partidas nuevas. Las que estaban en curso cuentan si terminan a más tardar el día siguiente. Después la temporada se finaliza:
+  - Lo hace un proceso diario de Vercel (Cron, a las 9:00 UTC) y también la primera consulta posterior.
+  - El cierre es idempotente y guarda el resultado con su historial de revisiones. Si una corrección autorizada posterior cambia el resultado, se registra como una revisión nueva.
+
+**Permisos (verificados en el servidor)**
+- Solo los integrantes ven un grupo; a los demás se les responde como si no existiera.
+- Solo el propietario cambia roles, y el grupo nunca queda sin propietario. Un administrador del grupo invita, crea temporadas y quita miembros.
+- Ser administrador de un grupo no da permisos globales en la app, y ser administrador de la app no da acceso a grupos privados.
+- El enlace de espectador usa un token aleatorio de 192 bits, del que solo se guarda el hash. Muestra nombres y puntos de esa partida, sin cuentas, grupos ni identificadores.
+
+**Migración «2026-12» (`server/sql/schema.sql`)**
+- Agrega las tablas `groups`, `group_members`, `group_invites`, `seasons` y `spectator_links`, con índices y RLS.
+- Agrega las columnas `group_id` y `season_id` en `games`.
+- No modifica datos existentes y se aplica sola al arrancar el servidor. En Vercel, la primera petición después de publicar.
+
+**Configuración**
+- En Vercel (proyecto `dominoapunte-server`), la variable `CRON_SECRET`: Vercel la usa para autorizar el cierre diario de temporadas.
+- Los grupos necesitan cuentas de la app, que crea el administrador (no hay registro público).
+
 ## Requisitos
 
 - **Node.js 22 o superior** (probado con Node 24).

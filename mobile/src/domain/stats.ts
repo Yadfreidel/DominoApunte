@@ -1,6 +1,12 @@
-// Estadísticas personales e historial entre rivales.
+// Estadísticas personales, rachas e historial entre rivales.
 // Se calculan solo con partidas válidas (terminadas, con ganador y no de práctica). Las canceladas,
 // las pendientes y los pases automáticos de torneo no cuentan (un pase no genera partida).
+//
+// Rachas: en el dominó no hay empates (gana el primero que llega a la meta), así que cada partida
+// válida es una victoria o una derrota. Una derrota corta la racha; las partidas canceladas,
+// abandonadas (pendientes), de práctica o en la papelera no la cortan ni la alargan porque no son
+// válidas. El orden es cronológico y estable (fecha de fin, fecha de inicio, identificador), no el
+// orden en que se sincronizaron.
 import type { Game, Mode, Side } from './game.ts';
 import { isCountable, nameKey, totals } from './game.ts';
 import type { PlayerRecord } from './players.ts';
@@ -17,14 +23,17 @@ export interface PersonStats {
   /** Promedio de puntos por partida: propios en individual, del equipo en parejas. Null sin partidas. */
   avgPoints: number | null;
   bestStreak: number;
+  /** Victorias seguidas hasta la última partida válida (0 si la última fue derrota). */
+  currentStreak: number;
 }
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
 export const personKey = (p: { playerId?: string; name: string }) => p.playerId ?? `nombre:${nameKey(p.name)}`;
 
-const finishedOrder = (a: Game, b: Game) =>
-  (a.finishedAt ?? a.createdAt).localeCompare(b.finishedAt ?? b.createdAt) || a.createdAt.localeCompare(b.createdAt);
+/** Orden cronológico estable de partidas terminadas. */
+export const finishedOrder = (a: Game, b: Game) =>
+  (a.finishedAt ?? a.createdAt).localeCompare(b.finishedAt ?? b.createdAt) || a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id);
 
 /** Estadísticas por persona, separadas por modalidad. */
 export function computePersonStats(games: Game[], registry: PlayerRecord[] = []): Record<Mode, PersonStats[]> {
@@ -66,6 +75,7 @@ export function computePersonStats(games: Game[], registry: PlayerRecord[] = [])
         winRate: s.played ? round1((s.wins / s.played) * 100) : null,
         avgPoints: s.played ? round1(s.points / s.played) : null,
         bestStreak: s.best,
+        currentStreak: s.streak,
       }))
       .sort((a, b) => b.wins - a.wins || (b.winRate ?? 0) - (a.winRate ?? 0) || a.name.localeCompare(b.name, 'es'));
   }
@@ -77,7 +87,8 @@ export function computePersonStats(games: Game[], registry: PlayerRecord[] = [])
 /** Pareja identificada por sus dos integrantes, sin importar el orden ni el nombre del equipo. */
 export const teamKey = (playerKeys: string[]) => [...playerKeys].sort().join('+');
 
-function sideKey(game: Game, side: Side): string | null {
+/** Clave estable de un lado: el jugador (individual) o la pareja por sus dos integrantes. */
+export function sideKey(game: Game, side: Side): string | null {
   const keys = side.participantIds.map((pid) => {
     const p = game.participants.find((x) => x.id === pid);
     return p ? personKey(p) : null;
@@ -153,4 +164,134 @@ export function headToHead(games: Game[], mode: Mode, a: string, b: string): Hea
     winsB: encounters.filter((e) => e.winner === 'b').length,
     others: encounters.filter((e) => e.winner === 'otro').length,
   };
+}
+
+// ---------- Parejas fijas ----------
+
+export interface TeamStats {
+  /** Integrantes ordenados (ver teamKey): la misma pareja aunque cambie el orden o el nombre del equipo. */
+  key: string;
+  name: string;
+  played: number;
+  wins: number;
+  losses: number;
+  winRate: number | null;
+  currentStreak: number;
+  bestStreak: number;
+}
+
+/** Estadísticas y rachas de cada pareja (partidas por parejas válidas). */
+export function computeTeamStats(games: Game[], registry: PlayerRecord[] = []): TeamStats[] {
+  const acc = new Map<string, TeamStats>();
+  for (const g of games.filter((x) => isCountable(x) && x.mode === 'parejas').sort(finishedOrder)) {
+    for (const side of g.sides) {
+      const key = sideKey(g, side);
+      if (!key) continue;
+      const names = side.participantIds
+        .map((pid) => g.participants.find((x) => x.id === pid)!)
+        .map((p) => (p.playerId && registry.find((r) => r.id === p.playerId)?.name) || p.name)
+        .sort((a, b) => a.localeCompare(b, 'es'));
+      const t = acc.get(key) ?? { key, name: '', played: 0, wins: 0, losses: 0, winRate: null, currentStreak: 0, bestStreak: 0 };
+      t.name = names.join(' y ');
+      t.played += 1;
+      if (side.id === g.winnerSideId) {
+        t.wins += 1;
+        t.currentStreak += 1;
+        t.bestStreak = Math.max(t.bestStreak, t.currentStreak);
+      } else {
+        t.losses += 1;
+        t.currentStreak = 0;
+      }
+      acc.set(key, t);
+    }
+  }
+  return [...acc.values()]
+    .map((t) => ({ ...t, winRate: t.played ? round1((t.wins / t.played) * 100) : null }))
+    .sort((a, b) => b.wins - a.wins || (b.winRate ?? 0) - (a.winRate ?? 0) || a.name.localeCompare(b.name, 'es'));
+}
+
+/** Racha actual de victorias de un jugador o pareja (clave de sideKey) en una modalidad. */
+export function currentStreakOf(games: Game[], mode: Mode, key: string): number {
+  let streak = 0;
+  for (const g of games.filter((x) => isCountable(x) && x.mode === mode).sort(finishedOrder)) {
+    const side = g.sides.find((sd) => sideKey(g, sd) === key);
+    if (!side) continue;
+    streak = side.id === g.winnerSideId ? streak + 1 : 0;
+  }
+  return streak;
+}
+
+// ---------- Rivalidades ----------
+
+export interface Rivalry {
+  total: number;
+  winsA: number;
+  winsB: number;
+  /** Lado que ganó los últimos enfrentamientos seguidos y cuántos (null si no hay). */
+  streak: { side: 'a' | 'b'; count: number } | null;
+  /** Últimos resultados, del más reciente al más antiguo ('a', 'b' u 'otro'). */
+  recent: Encounter['winner'][];
+  messages: string[];
+}
+
+/**
+ * Resumen de una rivalidad con mensajes basados en los datos, por ejemplo
+ * «Juan y Pedro llevan 4 victorias seguidas» o «La serie está 5 a 4; Luis y Carlos pueden empatar».
+ * `pluralA` / `pluralB`: si el nombre es de una pareja (verbo en plural).
+ */
+export function rivalrySummary(h: HeadToHead, nameA: string, nameB: string, plural = false): Rivalry {
+  const decided = h.encounters.filter((e) => e.winner !== 'otro');
+  let streak: Rivalry['streak'] = null;
+  for (const e of decided) {
+    if (!streak) streak = { side: e.winner as 'a' | 'b', count: 1 };
+    else if (e.winner === streak.side) streak.count += 1;
+    else break;
+  }
+  const verb = (one: string, many: string) => (plural ? many : one);
+  const messages: string[] = [];
+  if (streak && streak.count >= 2) {
+    messages.push(`${streak.side === 'a' ? nameA : nameB} ${verb('lleva', 'llevan')} ${streak.count} victorias seguidas contra ${streak.side === 'a' ? nameB : nameA}.`);
+  }
+  const { winsA, winsB } = h;
+  if (decided.length) {
+    if (winsA === winsB) {
+      messages.push(`La serie está empatada ${winsA} a ${winsB}.`);
+    } else {
+      const [lead, lag, hi, lo] = winsA > winsB ? [nameA, nameB, winsA, winsB] : [nameB, nameA, winsB, winsA];
+      const diff = hi - lo;
+      messages.push(
+        diff === 1
+          ? `La serie está ${hi} a ${lo} para ${lead}; ${lag} ${verb('puede', 'pueden')} empatar en la próxima.`
+          : `La serie está ${hi} a ${lo} para ${lead}; ${lag} ${verb('necesita', 'necesitan')} ${diff} victorias para empatar.`,
+      );
+    }
+  }
+  return {
+    total: h.encounters.length,
+    winsA,
+    winsB,
+    streak,
+    recent: h.encounters.slice(0, 5).map((e) => e.winner),
+    messages,
+  };
+}
+
+/**
+ * Nota breve para antes de empezar: historial entre los dos lados que se van a enfrentar.
+ * `sides` son los nombres de cada lado (uno en individual, dos en parejas). Los nombres se buscan en
+ * el registro de jugadores para usar su identificador estable; si alguien no está registrado, no hay
+ * historial y devuelve null. Solo para dos lados.
+ */
+export function matchupNote(games: Game[], mode: Mode, sides: string[][], registry: PlayerRecord[], labels: string[]): string | null {
+  if (sides.length !== 2) return null;
+  const keys = sides.map((names) => {
+    const ids = names.map((n) => registry.find((r) => nameKey(r.name) === nameKey(n))?.id);
+    if (ids.some((id) => !id) || ids.length !== (mode === 'parejas' ? 2 : 1)) return null;
+    return mode === 'parejas' ? teamKey(ids as string[]) : (ids[0] as string);
+  });
+  if (!keys[0] || !keys[1] || keys[0] === keys[1]) return null;
+  const h = headToHead(games, mode, keys[0], keys[1]);
+  if (!h.encounters.length) return null;
+  const r = rivalrySummary(h, labels[0], labels[1], mode === 'parejas');
+  return r.messages.join(' ') || null;
 }
