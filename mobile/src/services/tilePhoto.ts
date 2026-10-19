@@ -11,6 +11,9 @@ export interface PreparedPhoto {
   height: number;
 }
 
+/** Tamaño máximo de la imagen en base64 que se envía al servidor (≈2,6 MB de JPEG). */
+const MAX_BASE64_CHARS = 3_500_000;
+
 /** En el teléfono siempre; en la web, solo en dispositivos táctiles (el navegador del celular abre la cámara). */
 export const cameraAvailable =
   Platform.OS !== 'web' || (typeof navigator !== 'undefined' && (navigator.maxTouchPoints ?? 0) > 0);
@@ -50,7 +53,15 @@ export async function pickTilePhoto(source: 'camera' | 'library'): Promise<Prepa
     again.resize({ width: fw, height: fh });
     saved = await (await again.renderAsync()).saveAsync({ format: SaveFormat.JPEG, compress: 0.88, base64: true });
   }
+  // El servidor publicado acepta peticiones de hasta ~4,5 MB: si la foto queda muy pesada se
+  // vuelve a comprimir (mismo tamaño en píxeles, así las ubicaciones de las fichas no cambian).
+  for (const compress of [0.75, 0.6, 0.45]) {
+    if (!saved.base64 || saved.base64.length <= MAX_BASE64_CHARS) break;
+    const again = ImageManipulator.manipulate(saved.uri);
+    saved = await (await again.renderAsync()).saveAsync({ format: SaveFormat.JPEG, compress, base64: true });
+  }
   if (!saved.base64) throw new Error('No se pudo preparar la foto.');
+  if (saved.base64.length > MAX_BASE64_CHARS) throw new Error('La foto es demasiado pesada. Acércate un poco menos o usa otra imagen.');
   // Las dimensiones reales del archivo final son las que manda el servidor a validar.
   return { uri: saved.uri, base64: saved.base64, width: saved.width, height: saved.height };
 }

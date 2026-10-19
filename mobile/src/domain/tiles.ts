@@ -149,3 +149,41 @@ export function visionSize(width: number, height: number): [number, number] {
   }
   return [lo, Math.max(roundTiesToEven(lo / aspect), 1)];
 }
+
+/** Línea de una ficha para la lista: «Ficha 1: 6 | 4 = 10» («?» en la mitad que falta). */
+export function tileLine(t: Tile, index: number): string {
+  const half = (v: number | null) => (v === null ? '?' : String(v));
+  const sum = t.left === null || t.right === null ? '?' : String(tileValue(t));
+  return `Ficha ${index + 1}: ${half(t.left)} | ${half(t.right)} = ${sum}`;
+}
+
+const UNITS = ['cero', 'uno', 'dos', 'tres', 'cuatro', 'cinco', 'seis', 'siete', 'ocho', 'nueve', 'diez', 'once', 'doce', 'trece', 'catorce', 'quince', 'dieciséis', 'diecisiete', 'dieciocho', 'diecinueve', 'veinte', 'veintiuno', 'veintidós', 'veintitrés', 'veinticuatro', 'veinticinco', 'veintiséis', 'veintisiete', 'veintiocho', 'veintinueve'];
+const TENS = ['', '', '', 'treinta', 'cuarenta', 'cincuenta', 'sesenta', 'setenta', 'ochenta', 'noventa'];
+const HUNDREDS = ['', 'ciento', 'doscientos', 'trescientos', 'cuatrocientos', 'quinientos', 'seiscientos', 'setecientos', 'ochocientos', 'novecientos'];
+
+/** Número entero de 0 a 9999 en palabras (español). */
+export function numberToSpanish(n: number): string {
+  if (!Number.isInteger(n) || n < 0 || n > 9999) return String(n);
+  if (n < 30) return UNITS[n];
+  if (n < 100) {
+    const u = n % 10;
+    return u ? `${TENS[Math.floor(n / 10)]} y ${UNITS[u]}` : TENS[n / 10];
+  }
+  if (n === 100) return 'cien';
+  if (n < 1000) {
+    const rest = n % 100;
+    return rest ? `${HUNDREDS[Math.floor(n / 100)]} ${numberToSpanish(rest)}` : HUNDREDS[n / 100];
+  }
+  const thousands = Math.floor(n / 1000);
+  const rest = n % 1000;
+  const head = thousands === 1 ? 'mil' : `${numberToSpanish(thousands)} mil`;
+  return rest ? `${head} ${numberToSpanish(rest)}` : head;
+}
+
+/** Frase para «Escuchar total»: «El total es trece puntos». */
+export function spokenTotal(total: number): string {
+  if (total === 1) return 'El total es un punto';
+  // «veintiuno puntos» → «veintiún puntos», «treinta y uno» → «treinta y un».
+  const words = numberToSpanish(total).replace(/veintiuno$/, 'veintiún').replace(/ uno$/, ' un');
+  return `El total es ${words} puntos`;
+}

@@ -354,9 +354,11 @@ Las dos funciones **solo proponen** una anotación. El marcador cambia únicamen
   2. Leer la guía de foto: fichas completas y separadas, boca arriba, fondo liso, buena luz y cámara desde arriba.
   3. Tomar una foto o elegir una imagen.
   4. Revisar el resultado: marcas numeradas sobre la foto y la lista "Ficha 1: 6 | 4 = 10", con botones − / + por mitad, eliminar ficha, "Está bien" y agregar una ficha omitida.
-  5. Confirmar el grupo, elegir a quién se le suman y pulsar "Sumar N puntos a X".
-  6. Si hace falta, contar varios grupos en una misma mano. Cada grupo se confirma una vez y no se suma dos veces.
-  7. "Contar a mano" permite hacer todo sin foto y sin internet.
+  5. Ver el "Total: N puntos" y, si se quiere, pulsar **"Escuchar total"** (lee "El total es trece puntos" con la voz del sistema, `expo-speech`).
+  6. Confirmar el grupo, elegir a quién se le suman y pulsar **"Confirmar y sumar"**. Nunca se suma sin esta confirmación, y el doble toque no suma dos veces.
+  - "Repetir la foto" descarta el grupo actual y vuelve a abrir la cámara.
+  7. Si hace falta, contar varios grupos en una misma mano. Cada grupo se confirma una vez y no se suma dos veces.
+  8. "Contar a mano" permite hacer todo sin foto y sin internet.
 - **Reglas que aplica el código, no el modelo:**
   - El total se calcula sumando mitades y la mitad en blanco vale 0.
   - Un valor fuera del conjunto o ilegible queda vacío y marcado para revisión.
@@ -368,10 +370,11 @@ Las dos funciones **solo proponen** una anotación. El marcador cambia únicamen
   - El servidor rechaza cualquier imagen que el modelo fuera a reescalar.
   - Si el modelo declina la solicitud, el servidor la reintenta con el modelo alternativo predeterminado de la API (`fallbacks: "default"`).
 - **Privacidad:** la foto viaja de la app al servidor y del servidor a Anthropic solo para el análisis; **no se guarda** ni en el teléfono, ni en el servidor, ni en registros. Según Anthropic, las imágenes enviadas a la API no se usan para entrenar modelos.
-- **Configuración necesaria:**
-  1. Crear una clave en [platform.claude.com](https://platform.claude.com) y ponerla en `server/.env` como `ANTHROPIC_API_KEY=...`. Nunca va en la app.
-  2. Reiniciar el servidor.
+- **Configuración necesaria** (sin la clave, el botón de foto queda bloqueado y la app ofrece "Contar a mano"):
+  1. Crear una clave en [platform.claude.com](https://platform.claude.com) → API Keys. Nunca va en la app.
+  2. Servidor publicado: en Vercel, proyecto `dominoapunte-server` → Settings → Environment Variables, agregar `ANTHROPIC_API_KEY` (Production) y volver a publicar. Servidor local: ponerla en `server/.env` y reiniciarlo.
   3. Iniciar sesión en la app (Configuración). El análisis exige sesión porque tiene costo.
+- **Límites de Vercel:** la función del servidor tiene hasta 300 s (máximo del plan Hobby) y la app comprime la foto para que la petición no supere el límite de 4,5 MB.
 - **Costo estimado:** con las tarifas publicadas de Claude Opus 5.5 ($4 por millón de tokens de entrada y $20 por millón de salida), una foto de tamaño máximo son ≈4.800 tokens de imagen (≈$0,02). El modelo además genera texto de razonamiento y respuesta, que se cobra como salida; el costo total por foto aún **no se midió**, porque no había una clave disponible durante el desarrollo.
 - **Límites:** 30 análisis cada 10 minutos por usuario, 2 minutos de espera máxima y cancelación al salir de la pantalla. Una respuesta tardía nunca se aplica a otra partida ni a otro grupo.
 

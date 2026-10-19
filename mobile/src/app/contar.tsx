@@ -16,14 +16,16 @@ import {
   markReviewed,
   removeTile,
   setMax,
+  spokenTotal,
   TILE_SETS,
-  tileValue,
+  tileLine,
   upsertGroup,
   type Tile,
   type TileGroup,
   type TileSetId,
 } from '@/domain/tiles.ts';
 import { ApiError } from '@/services/api';
+import { speakSpanish, stopSpeaking } from '@/services/speak';
 import { cameraAvailable, pickTilePhoto, type PreparedPhoto } from '@/services/tilePhoto';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, sideColor, space } from '@/theme';
@@ -45,6 +47,8 @@ const ISSUE_LABELS: Record<string, string> = {
   fichas_cortadas: 'Algunas fichas quedan cortadas en el borde.',
   fichas_boca_abajo: 'Hay fichas boca abajo (no se cuentan).',
 };
+
+const GUIDE_HEADLINE = 'Coloca las fichas boca arriba, separadas, sobre un fondo uniforme y con buena iluminación.';
 
 const GUIDE: { icon: IconName; text: string }[] = [
   { icon: 'grid-outline', text: 'Fichas completas y separadas entre sí' },
@@ -90,8 +94,19 @@ export default function CountTiles() {
     };
   }, [api, loggedIn]);
 
-  // Al salir de la pantalla se cancela cualquier análisis pendiente.
-  useEffect(() => () => request.current?.controller.abort(), []);
+  // Al salir de la pantalla se cancela cualquier análisis pendiente y se detiene la voz.
+  useEffect(
+    () => () => {
+      request.current?.controller.abort();
+      stopSpeaking();
+    },
+    [],
+  );
+
+  const listen = async (value: number) => {
+    const ok = await speakSpanish(spokenTotal(value));
+    if (!ok) toast('Este dispositivo no permite leer en voz alta.', 'info');
+  };
 
   if (!game || game.status !== 'pendiente') {
     return (
@@ -259,7 +274,21 @@ export default function CountTiles() {
       ) : null}
 
       {step === 'review' && current ? (
-        <ReviewStep group={current} onChange={setCurrent} onConfirm={saveGroup} onDiscard={discardCurrent} />
+        <ReviewStep
+          group={current}
+          onChange={setCurrent}
+          onConfirm={saveGroup}
+          onDiscard={discardCurrent}
+          onListen={() => listen(groupTotal(current))}
+          onRetake={
+            current.photoUri && loggedIn
+              ? () => {
+                  setCurrent(null);
+                  void analyze(cameraAvailable ? 'camera' : 'library');
+                }
+              : undefined
+          }
+        />
       ) : null}
 
       {step === 'summary' && groups.length > 0 ? (
@@ -329,9 +358,11 @@ export default function CountTiles() {
             <View style={[s.summary, canConfirm && { borderColor: colors.lime }]}>
               <Text style={s.summaryText}>{side ? `Sumar ${total} puntos a ${side.name}` : `Total: ${total} puntos`}</Text>
             </View>
+            <Button label="Escuchar total" icon="volume-high-outline" variant="outline" size="sm" onPress={() => listen(total)} />
+            {!side ? <Text style={s.muted}>Elige a quién se le suman los puntos.</Text> : null}
             <View style={s.row}>
               <Button label="Cancelar" variant="outline" onPress={leave} disabled={saving} style={s.flex} />
-              <Button label="Confirmar" icon="checkmark" onPress={submit} disabled={!canConfirm} loading={saving} style={s.flex} />
+              <Button label="Confirmar y sumar" icon="checkmark" onPress={submit} disabled={!canConfirm} loading={saving} style={s.flex} />
             </View>
           </Card>
         </>
@@ -370,6 +401,7 @@ function SetupStep({
       </Card>
       <Card style={{ gap: space.sm }}>
         <Text style={s.title}>Para una buena foto</Text>
+        <Text style={s.guideHeadline}>{GUIDE_HEADLINE}</Text>
         {GUIDE.map((g) => (
           <View key={g.text} style={s.guideRow}>
             <Ionicons name={g.icon} size={20} color={colors.lime} />
@@ -398,11 +430,15 @@ function ReviewStep({
   onChange,
   onConfirm,
   onDiscard,
+  onListen,
+  onRetake,
 }: {
   group: TileGroup;
   onChange: (g: TileGroup) => void;
   onConfirm: () => void;
   onDiscard: () => void;
+  onListen: () => void;
+  onRetake?: () => void;
 }) {
   const max = setMax(group.set);
   const problems = groupProblems(group);
@@ -439,7 +475,9 @@ function ReviewStep({
                   selected === t.id && { borderWidth: 4 },
                 ]}
               >
-                <Text style={[s.boxLabel, { backgroundColor: problemIds.has(t.id) ? colors.warning : colors.lime }]}>{i + 1}</Text>
+                <Text style={[s.boxLabel, { backgroundColor: problemIds.has(t.id) ? colors.warning : colors.lime }]}>
+                  {i + 1}: {t.left ?? '?'}|{t.right ?? '?'}
+                </Text>
               </Pressable>
             ) : null,
           )}
@@ -469,7 +507,7 @@ function ReviewStep({
             <View key={t.id} style={[s.tileRow, selected === t.id && { backgroundColor: colors.limeFaint }, problem && { borderColor: colors.warning }]}>
               <View style={s.rowBetween}>
                 <Text style={s.tileName}>
-                  Ficha {i + 1}
+                  {tileLine(t, i)}
                   {t.source === 'manual' ? ' (a mano)' : ''}
                 </Text>
                 <Pressable onPress={() => onChange(removeTile(group, t.id))} accessibilityRole="button" accessibilityLabel={`Eliminar ficha ${i + 1}`} hitSlop={6}>
@@ -480,7 +518,6 @@ function ReviewStep({
                 <HalfStepper value={t.left} label={`Ficha ${i + 1}, mitad 1`} onMinus={() => step(t, 'left', -1)} onPlus={() => step(t, 'left', 1)} />
                 <Text style={s.sep}>|</Text>
                 <HalfStepper value={t.right} label={`Ficha ${i + 1}, mitad 2`} onMinus={() => step(t, 'right', -1)} onPlus={() => step(t, 'right', 1)} />
-                <Text style={s.eq}>= {t.left === null || t.right === null ? '?' : tileValue(t)}</Text>
               </View>
               {problem ? (
                 <View style={s.rowBetween}>
@@ -494,7 +531,12 @@ function ReviewStep({
           );
         })}
         <Button label="Agregar ficha omitida" icon="add" variant="outline" size="sm" onPress={() => onChange(addManualTile(group, `${group.id}-m${Date.now()}`))} />
+        <View style={[s.rowBetween, s.totalRow]}>
+          <Text style={s.title}>Total: {groupTotal(group)} puntos</Text>
+          <Button label="Escuchar total" icon="volume-high-outline" variant="ghost" size="sm" onPress={onListen} />
+        </View>
       </Card>
+      {onRetake ? <Button label="Repetir la foto" icon="camera-reverse-outline" variant="outline" onPress={onRetake} /> : null}
 
       {problems.length ? <Text style={s.note}>Quedan {problems.length} ficha(s) por revisar antes de confirmar el grupo.</Text> : null}
       <View style={s.row}>
@@ -529,6 +571,8 @@ const s = StyleSheet.create({
   flex: { flexGrow: 1, flexBasis: 100 },
   guideRow: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   guideText: { color: colors.text, fontSize: 15, flex: 1 },
+  guideHeadline: { color: colors.lime, fontSize: 15, fontWeight: '700', lineHeight: 21 },
+  totalRow: { borderTopWidth: 1, borderTopColor: colors.borderSoft, paddingTop: space.sm, flexWrap: 'wrap' },
   photoWrap: { width: '100%', borderRadius: radius.lg, overflow: 'hidden', backgroundColor: '#000' },
   box: { position: 'absolute', borderWidth: 2, borderRadius: 4 },
   boxLabel: { position: 'absolute', top: -2, left: -2, minWidth: 20, textAlign: 'center', color: colors.onLime, fontWeight: '800', fontSize: 12, paddingHorizontal: 3, borderRadius: 4, overflow: 'hidden' },
@@ -538,7 +582,6 @@ const s = StyleSheet.create({
   tileName: { color: colors.text, fontWeight: '700', fontSize: 15 },
   halves: { flexDirection: 'row', alignItems: 'center', gap: space.sm, flexWrap: 'wrap' },
   sep: { color: colors.textDim, fontSize: 22 },
-  eq: { color: colors.text, fontFamily: fonts.display, fontSize: 24, marginLeft: 'auto' },
   stepper: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.border, borderRadius: radius.md },
   stepBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
   stepValue: { color: colors.text, fontFamily: fonts.display, fontSize: 24, minWidth: 28, textAlign: 'center' },
