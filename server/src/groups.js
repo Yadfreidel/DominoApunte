@@ -287,7 +287,7 @@ export function registerGroupRoutes(app, ctx) {
     const code = newInviteCode();
     const id = newId();
     const at = now();
-    const expiresAt = new Date(Date.now() + days * 86400_000).toISOString();
+    const expiresAt = new Date(Date.parse(now()) + days * 86400_000).toISOString();
     await db.run(
       'INSERT INTO domino.group_invites (id, group_id, code_hash, created_by, created_at, expires_at, max_uses) VALUES ($1, $2, $3, $4, $5, $6, $7)',
       [id, g.id, sha256(normalizeCode(code)), req.user.id, at, expiresAt, maxUses],

@@ -31,6 +31,12 @@ La app funciona completa **sin servidor y sin conexión**. El servidor solo hace
 - Gana el primero que alcanza o supera la meta. Desde ahí se puede jugar la revancha (mismos participantes, marcadores en cero) o empezar una partida nueva.
 - Solo se aceptan números enteros no negativos (máximo 1000 por mano).
 
+**Pantalla encendida** (Configuración → Accesibilidad → «Mantener pantalla encendida», activado por defecto)
+- Mientras la app está visible, en cualquier pantalla (marcador, menús y celebraciones), la pantalla no se apaga aunque no se toque. Al pasar a otra app o bloquear el teléfono se libera, y al volver se recupera sola.
+- En el navegador y en la app instalada desde el navegador se usa la Screen Wake Lock API (`src/services/wakeLock.ts`), con un único controlador global (`src/services/screenAwake.ts`) que no se libera al navegar. En la compilación nativa se usa `expo-keep-awake`.
+- Configuración muestra el **estado real** (Activa, Pendiente, En pausa, No permitido o Sin soporte), no solo la preferencia. Safari en iPhone puede exigir un toque: entonces se activa con el primer toque en cualquier parte. Si el teléfono lo bloquea (por ejemplo, con el ahorro de batería), aparece un aviso breve con el botón «Mantener pantalla encendida».
+- Necesita Chrome o Edge en Android, o Safari en iPhone (iOS 18.4 o posterior si la app está instalada en la pantalla de inicio). El navegador interno de WhatsApp, Instagram u otras apps no lo ofrece. No se usan videos ocultos ni actividad simulada, y no se toca la clave ni la seguridad del teléfono.
+
 **Menú principal (☰):** Nueva partida, Partida en curso, Historial, Torneos, Estadísticas, Rivales y Configuración. El panel de administración **no aparece en el menú**: se entra escribiendo `/admin` en la dirección (ver [Panel de administración privado](#panel-de-administración-privado)).
 
 **Historial**
@@ -220,6 +226,34 @@ Todas las tablas nuevas tienen RLS. En Supabase, después de arrancar el servido
 - En Vercel (proyecto `dominoapunte-server`), la variable `CRON_SECRET`: Vercel la usa para autorizar el cierre diario de temporadas.
 - Los grupos necesitan cuentas de la app, que crea el administrador (no hay registro público).
 
+## Sin conexión, retos y narrador
+
+### Partidas completas sin internet
+- Después de abrir la app **una vez con internet**, funciona sin conexión: crear partidas (con jugadores guardados o nuevos), elegir meta y pase, anotar, corregir y deshacer manos, terminar partidas, ver el marcador y el historial, jugar retos. Al cerrar y volver a abrir se conserva todo.
+- Datos: en la web y la app instalada se guardan en **IndexedDB** (`src/services/idbStorage.ts`). Cada escritura se confirma en disco antes de mostrarse como registrada. En el teléfono nativo se usa AsyncStorage. La primera vez se copian a IndexedDB los datos que la versión anterior guardaba en localStorage; la copia vieja se conserva sin usarse.
+- La app web abre sin conexión gracias a un service worker (`public/sw.js`) que guarda **solo los archivos de la app**, nunca respuestas del servidor de datos. La página se pide primero a la red, así una versión nueva llega en cuanto hay conexión.
+- **Necesitan conexión:** iniciar sesión, grupos y temporadas, pantalla grande, contar fichas con la cámara, el panel de administración y la actualización entre varios dispositivos. Si la sesión caduca, la app no la salta: las partidas siguen guardadas y se suben al volver a entrar.
+
+### Retos («Retos» en el menú)
+- **Primero en ganar N** (ej.: la primera pareja en conseguir 3 victorias) o **serie por período** (ej.: el fin de semana; gana quien tenga más victorias).
+- Se configuran nombre, participantes fijos (2 a 4 jugadores o 2 parejas), modalidad, victorias o fechas, meta y pase (las mismas opciones de una partida) y la regla de empate (por defecto, la serie puede terminar en empate; opcionalmente desempata quien sumó más puntos). Las reglas se muestran antes de crearlo.
+- La partida se asocia al reto **antes de empezar**, con «Jugar partida del reto». Las partidas anteriores no se incorporan. Cada partida queda también en el historial normal, con sus puntos y reglas sin cambios, y pertenece a un reto como máximo.
+- Solo cuentan partidas terminadas: no las canceladas, en curso, de práctica ni con otros participantes o reglas. En «primero en N», al llegar a N el reto se cierra; reabrirlo es una acción explícita que sube las victorias necesarias. En la serie cuenta el día en que **termina** cada partida, en la zona horaria del reto, con el primer y el último día incluidos.
+- El progreso se calcula con las mismas partidas, así que una corrección lo recalcula. Si cambia un ganador ya declarado, queda escrito en «Historial del reto».
+- Funciona sin conexión. Con sesión, el reto y sus partidas se guardan también en el servidor, que valida que cada partida sea compatible (si no, la guarda sin reto y avisa). Mientras no se sincronizan, las victorias se ven como provisionales. **Límite de esta versión:** un reto lo lleva un solo dispositivo anotador; no hay invitaciones ni vista desde otros teléfonos.
+
+### Narrador (Configuración → Narrador; desactivado al inicio)
+- Anuncia en voz alta y en pantalla: inicio, cambio de líder, remontada, cerca de ganar, victoria (nombres y marcador final) y avances de retos.
+- Reglas de los anuncios (`src/domain/narrator.ts`, probadas en `tests/narrador.test.ts`):
+  - **Cambio de líder:** solo cuando otro lado pasa a ir solo adelante. La primera ventaja de la partida y los empates no cuentan.
+  - **Remontada:** el nuevo líder llegó a estar al menos el 25 % de la meta por detrás (mínimo 15 puntos). Reemplaza al anuncio de cambio de líder.
+  - **Cerca de ganar:** al entrar en el 10 % final de la meta (mínimo 10 puntos), una vez, diciendo cuántos puntos faltan.
+  - **Victoria:** tiene prioridad; la mano ganadora no anuncia nada más.
+- Solo anuncia acciones hechas ahora en el marcador: nunca al abrir el historial, recargar o sincronizar. Cada evento tiene un id y no se repite. Corregir o deshacer cancela lo pendiente de esa partida. Mientras el micrófono escucha («Voz»), el narrador calla. La victoria se anuncia con la celebración, tras la fanfarria si está activa, con el marcador final copiado antes de preparar la siguiente partida.
+- Ajustes: activar, silenciar (también desde el marcador), volumen, velocidad, qué anunciar y «Probar voz». Usa una voz en español del dispositivo, preferiblemente instalada (funciona sin internet). Si no hay ninguna, los anuncios salen solo en pantalla y Configuración lo explica. No envía datos a ningún servicio.
+
+---
+
 ## Requisitos
 
 - **Node.js 22 o superior** (probado con Node 24).
@@ -360,7 +394,13 @@ El servidor usa **PostgreSQL**. Si `DATABASE_URL` está vacío, usa PGlite (Post
 
 ## Sincronización
 
-- Las partidas se anotan siempre en el dispositivo. Con sesión iniciada, se envían al servidor a los ~1,5 s de cada cambio, cada minuto y al volver a abrir la app. Sin conexión quedan pendientes y se envían después; Configuración muestra cuántas faltan.
+- Las partidas se anotan siempre en el dispositivo. Con sesión iniciada, se envían al servidor a los ~1,5 s de cada cambio, cada minuto, al volver a la app y al recuperar la red. Sin conexión quedan pendientes y se envían después; Configuración muestra cuántas faltan.
+- **Cola persistente:** cada partida, torneo y reto tiene una revisión que aumenta con cada cambio (mano nueva, corrección, deshacer, cancelación). Está pendiente mientras el servidor no confirme esa revisión exacta, y esa información se guarda en el dispositivo, así que sobrevive a cerrar la app. Retos y torneos se envían antes que sus partidas.
+- **Sin duplicados:** el servidor guarda el estado completo de cada partida (manos con id propio) y descarta revisiones que ya tiene. Reenviar lo mismo, o reenviar tras perder la respuesta, no suma puntos dos veces.
+- **Reintentos:** si el servidor no responde, se reintenta solo con espera progresiva (2 s, 4 s, 8 s… hasta 5 minutos). La disponibilidad real se comprueba con la propia petición, no solo con el aviso de red del teléfono. Nunca hay dos sincronizaciones a la vez.
+- **Conflictos:** cada envío lleva la revisión en la que se basa y el id del dispositivo. Si otro dispositivo cambió la partida en el servidor desde entonces, no se sobrescribe nada: el marcador muestra las dos versiones y el usuario elige «Usar la otra» o «Conservar la mía». Mientras tanto no se anotan más manos en esa partida.
+- **Por cuenta:** lo creado con sesión queda a nombre de esa cuenta; lo creado sin sesión lo adopta la primera cuenta que lo sincroniza. Si en el mismo teléfono entra otra cuenta, no sube las partidas de la anterior (Configuración lo indica).
+- **Indicador** bajo la cabecera: «Sin conexión: guardando en este dispositivo», «Pendiente de sincronizar», «Sincronizando…», «Sincronizado», «Error de sincronización» (con «Reintentar») o «Conflicto entre dispositivos». Si falla el almacenamiento del teléfono, avisa en rojo y la acción no se muestra como guardada.
 - Si un administrador **corrige** una partida, su versión prevalece. El dispositivo la recibe en la siguiente sincronización y puede seguir anotando sobre ella.
 - Si un administrador envía una partida a la **papelera**, desaparece de los dispositivos y deja de contar. Si la restaura, el dispositivo de su dueño la recupera. Si la elimina definitivamente, no vuelve a subirse.
 - Los torneos que el administrador crea, pausa, cancela o corrige llegan al dispositivo de su organizador al sincronizar.

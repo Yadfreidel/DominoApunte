@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import cors from 'cors';
 import express from 'express';
 import { registerAdminRoutes } from './admin.js';
+import { resolveChallenge, validateIncomingChallenge } from './challenges.js';
 import { registerGroupRoutes, resolveAssociation } from './groups.js';
 import {
   ADMIN_ROLES,
@@ -123,6 +124,11 @@ export function validateIncomingGame(g) {
     rules: cleanRules(g.rules),
     groupId: typeof g.groupId === 'string' && ID_RE.test(g.groupId) ? g.groupId : null,
     seasonId: typeof g.seasonId === 'string' && ID_RE.test(g.seasonId) ? g.seasonId : null,
+    challengeId: typeof g.challengeId === 'string' && ID_RE.test(g.challengeId) ? g.challengeId : null,
+    // Sincronización sin conexión: revisión confirmada en la que se basa este cambio (undefined en
+    // versiones anteriores de la app) e identificador del dispositivo que lo envía.
+    baseRevision: g.baseRevision === undefined ? undefined : Number.isInteger(g.baseRevision) && g.baseRevision >= 0 ? g.baseRevision : null,
+    deviceId: typeof g.deviceId === 'string' && ID_RE.test(g.deviceId) ? g.deviceId : null,
   };
 }
 
@@ -295,12 +301,21 @@ export function createApp({
       rules: row.rules_json ? JSON.parse(row.rules_json) : null,
       groupId: row.group_id ?? null,
       seasonId: row.season_id ?? null,
+      challengeId: row.challenge_id ?? null,
       deletedAt: row.deleted_at ?? null,
       ownerUserId: row.source_user_id ?? null,
     };
   }
 
   /** Carga varias partidas completas con dos consultas, conservando el orden de `ids`. */
+  /** true si el servidor ya tiene exactamente este estado de la partida (mismas manos y estado). */
+  async function sameContent(t, game) {
+    const row = await t.get('SELECT status FROM domino.games WHERE id = $1', [game.id]);
+    const hands = await t.all('SELECT id, side_id, points FROM domino.hands WHERE game_id = $1 ORDER BY seq', [game.id]);
+    if (!row || row.status !== game.status || hands.length !== game.hands.length) return false;
+    return hands.every((h, i) => h.id === game.hands[i].id && h.side_id === game.hands[i].sideId && h.points === game.hands[i].points);
+  }
+
   async function loadGames(t, ids) {
     if (ids.length === 0) return [];
     const rows = await t.all('SELECT * FROM domino.games WHERE id = ANY($1::text[])', [ids]);
@@ -357,19 +372,21 @@ export function createApp({
   }
 
   /** Guarda la partida completa (cabecera, manos y vínculos con jugadores). Usar dentro de una transacción. */
-  async function writeGame(t, game, { adminRevision, sourceUserId }) {
+  async function writeGame(t, game, { adminRevision, sourceUserId, deviceId = null }) {
     await t.run(
       `INSERT INTO domino.games (id, created_at, updated_at, finished_at, status, mode, target, participants_json, sides_json,
                                  winner_side_id, rematch_of, revision, admin_revision, source_user_id,
-                                 practice, starter_participant_id, tournament_id, match_id, rules_json, group_id, season_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+                                 practice, starter_participant_id, tournament_id, match_id, rules_json, group_id, season_id,
+                                 challenge_id, last_device_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
        ON CONFLICT (id) DO UPDATE SET
          updated_at = excluded.updated_at, finished_at = excluded.finished_at, status = excluded.status,
          mode = excluded.mode, target = excluded.target, participants_json = excluded.participants_json,
          sides_json = excluded.sides_json, winner_side_id = excluded.winner_side_id, rematch_of = excluded.rematch_of,
          revision = excluded.revision, admin_revision = excluded.admin_revision,
          practice = excluded.practice, starter_participant_id = excluded.starter_participant_id,
-         tournament_id = excluded.tournament_id, match_id = excluded.match_id, rules_json = excluded.rules_json`,
+         tournament_id = excluded.tournament_id, match_id = excluded.match_id, rules_json = excluded.rules_json,
+         last_device_id = excluded.last_device_id`,
       [
         game.id,
         game.createdAt,
@@ -394,6 +411,9 @@ export function createApp({
         // así una partida no se cuenta en dos temporadas ni se mueve de una a otra).
         game.groupId ?? null,
         game.seasonId ?? null,
+        // El reto, igual que el grupo, solo se fija al crearla: una partida cuenta en un reto como máximo.
+        game.challengeId ?? null,
+        deviceId,
       ],
     );
     await t.run('DELETE FROM domino.hands WHERE game_id = $1', [game.id]);
@@ -568,6 +588,8 @@ export function createApp({
     if (!Array.isArray(incoming) || incoming.length > 200) throw bad('Envía entre 0 y 200 partidas.');
     const incomingTournaments = req.body?.tournaments ?? [];
     if (!Array.isArray(incomingTournaments) || incomingTournaments.length > 100) throw bad('Envía como máximo 100 torneos.');
+    const incomingChallenges = req.body?.challenges ?? [];
+    if (!Array.isArray(incomingChallenges) || incomingChallenges.length > 100) throw bad('Envía como máximo 100 retos.');
     const isAdmin = isAdminRole(req.user.role);
     // Solo el dueño (la cuenta que la registró) modifica su partida o torneo; los administradores, cualquiera.
     const canEdit = (ownerId) => isAdmin || ownerId == null || ownerId === req.user.id;
@@ -578,6 +600,36 @@ export function createApp({
     const warnings = [];
     const acceptedTournaments = [];
     const serverTournamentIds = [];
+    const acceptedChallenges = [];
+    const conflicts = [];
+    // Retos primero: el servidor debe conocer el reto antes de recibir sus partidas.
+    for (const raw of incomingChallenges) {
+      let ch;
+      try {
+        ch = validateIncomingChallenge(raw);
+      } catch (err) {
+        errors.push({ id: typeof raw?.id === 'string' ? raw.id.slice(0, 64) : null, error: err.message });
+        continue;
+      }
+      const deviceId = typeof raw.deviceId === 'string' && ID_RE.test(raw.deviceId) ? raw.deviceId : null;
+      const outcome = await db.tx(async (t) => {
+        const existing = await t.get('SELECT revision, source_user_id FROM domino.challenges WHERE id = $1 FOR UPDATE', [ch.id]);
+        if (existing && !canEdit(existing.source_user_id)) return 'forbidden';
+        // Reenvío de una versión ya guardada (respuesta perdida, reintento): no cambia nada.
+        if (existing && existing.revision >= ch.revision) return { revision: existing.revision };
+        const { id, name, kind, mode, status, createdAt, updatedAt, revision, ...data } = ch;
+        await t.run(
+          `INSERT INTO domino.challenges (id, name, kind, mode, status, data_json, created_at, updated_at, revision, source_user_id, last_device_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           ON CONFLICT (id) DO UPDATE SET name = excluded.name, status = excluded.status, data_json = excluded.data_json,
+             updated_at = excluded.updated_at, revision = excluded.revision, last_device_id = excluded.last_device_id`,
+          [id, name, kind, mode, status, JSON.stringify(data), createdAt, updatedAt, revision, existing ? existing.source_user_id : req.user.id, deviceId],
+        );
+        return { revision };
+      });
+      if (outcome === 'forbidden') errors.push({ id: ch.id, error: 'No puedes modificar un reto de otra cuenta.' });
+      else acceptedChallenges.push({ id: ch.id, revision: outcome.revision });
+    }
     for (const raw of incomingTournaments) {
       let tour;
       try {
@@ -628,7 +680,7 @@ export function createApp({
       const outcome = await db.tx(async (t) => {
         if (await t.get('SELECT 1 AS x FROM domino.deleted_games WHERE id = $1', [game.id])) return 'deleted';
         const existing = await t.get(
-          'SELECT revision, admin_revision, source_user_id, deleted_at, group_id, season_id FROM domino.games WHERE id = $1 FOR UPDATE',
+          'SELECT revision, admin_revision, source_user_id, deleted_at, group_id, season_id, challenge_id, last_device_id FROM domino.games WHERE id = $1 FOR UPDATE',
           [game.id],
         );
         if (existing?.deleted_at) return 'deleted';
@@ -642,26 +694,46 @@ export function createApp({
           // el servidor manda y el dispositivo debe adoptar su versión.
           return 'server';
         }
-        if (existing && existing.revision >= game.revision) return { revision: existing.revision };
+        // Las versiones de la app con sincronización sin conexión envían la revisión base: si otro
+        // dispositivo cambió la partida en el servidor desde esa revisión, es un conflicto y no se
+        // sobrescribe. Un reenvío del mismo dispositivo (respuesta perdida) se acepta sin cambios.
+        const modern = game.baseRevision !== undefined;
+        const ownWrite = !!existing && !!game.deviceId && existing.last_device_id === game.deviceId;
+        if (existing && existing.revision >= game.revision) {
+          if (!modern || ownWrite) return { revision: existing.revision };
+          if (existing.revision === game.revision && (await sameContent(t, game))) return { revision: existing.revision };
+          return 'conflict';
+        }
+        if (existing && modern && !ownWrite && existing.revision !== game.baseRevision) return 'conflict';
         let warning = null;
         if (existing) {
           game.groupId = existing.group_id ?? null;
           game.seasonId = existing.season_id ?? null;
+          game.challengeId = existing.challenge_id ?? null;
         } else {
           const assoc = await resolveAssociation(t, req.user, game, now());
           game.groupId = assoc.groupId;
           game.seasonId = assoc.seasonId;
           warning = assoc.warning;
+          const ch = await resolveChallenge(t, req.user, game, isAdmin);
+          game.challengeId = ch.challengeId;
+          warning = warning ?? ch.warning;
         }
         const normalized = recompute(game, game.hands, game.updatedAt);
         await writeGame(t, normalized, {
           adminRevision: existing?.admin_revision ?? 0,
           sourceUserId: existing ? existing.source_user_id : req.user.id,
+          deviceId: game.deviceId,
         });
-        return { revision: game.revision, warning, groupId: game.groupId, seasonId: game.seasonId };
+        return { revision: game.revision, warning, groupId: game.groupId, seasonId: game.seasonId, challengeId: game.challengeId };
       });
-      if (outcome?.warning) warnings.push({ id: game.id, warning: outcome.warning, groupId: outcome.groupId, seasonId: outcome.seasonId });
-      if (outcome === 'deleted') deleted.push(game.id);
+      if (outcome?.warning) {
+        warnings.push({ id: game.id, warning: outcome.warning, groupId: outcome.groupId, seasonId: outcome.seasonId, challengeId: outcome.challengeId ?? null });
+      }
+      if (outcome === 'conflict') {
+        conflicts.push(game.id);
+        serverVersionIds.push(game.id);
+      } else if (outcome === 'deleted') deleted.push(game.id);
       else if (outcome === 'server') serverVersionIds.push(game.id);
       else if (outcome === 'forbidden') errors.push({ id: game.id, error: 'No puedes modificar una partida registrada por otra cuenta.' });
       else accepted.push({ id: game.id, revision: outcome.revision });
@@ -728,7 +800,7 @@ export function createApp({
     const serverTournaments = tIds.length
       ? (await db.all('SELECT * FROM domino.tournaments WHERE id = ANY($1::text[])', [tIds])).map(rowToTournament)
       : [];
-    res.json({ accepted, serverVersions, deleted, errors, warnings, acceptedTournaments, serverTournaments });
+    res.json({ accepted, serverVersions, deleted, errors, warnings, acceptedTournaments, serverTournaments, acceptedChallenges, conflicts });
   });
 
   // ---------- Conteo de fichas con cámara ----------

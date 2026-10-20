@@ -1,9 +1,11 @@
 // Persistencia local. Cada partida se guarda en su propia clave para que registrar una mano
 // escriba solo esa partida. Las escrituras se encolan para conservar el orden.
 import type { Game, Mode } from './game.ts';
-import { nameKey, normalizeName } from './game.ts';
+import { nameKey, newId, normalizeName } from './game.ts';
 import { migrateGames, resolvePlayers, type PlayerRecord } from './players.ts';
 import type { Tournament } from './tournament.ts';
+import { isChallenge, type Challenge } from './challenge.ts';
+import type { NarrationKind } from './narrator.ts';
 import type { Appearance } from './appearance.ts';
 
 export interface KeyValueStorage {
@@ -24,6 +26,40 @@ export interface Settings {
   keepAwake: boolean;
   /** Sonido al ganar una partida (solo si el usuario lo activa). */
   victorySound: boolean;
+  /** Narrador de momentos clave (desactivado inicialmente). */
+  narrator: NarratorSettings;
+}
+
+export interface NarratorSettings {
+  enabled: boolean;
+  /** Silencio rápido desde el marcador (sin desactivar el narrador). */
+  muted: boolean;
+  /** 0 a 1. */
+  volume: number;
+  /** 0.5 a 1.5 (1 = normal). */
+  rate: number;
+  events: Record<NarrationKind, boolean>;
+}
+
+export const DEFAULT_NARRATOR: NarratorSettings = {
+  enabled: false,
+  muted: false,
+  volume: 1,
+  rate: 1,
+  events: { inicio: true, lider: true, remontada: true, cerca: true, victoria: true, reto: true },
+};
+
+/** Ajustes del narrador guardados (posiblemente de una versión anterior) completados con los valores por defecto. */
+export function normalizeNarrator(raw: Partial<NarratorSettings> | undefined | null): NarratorSettings {
+  const n = raw ?? {};
+  const clamp = (v: unknown, lo: number, hi: number, d: number) => (typeof v === 'number' && Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : d);
+  return {
+    enabled: n.enabled === true,
+    muted: n.muted === true,
+    volume: clamp(n.volume, 0, 1, DEFAULT_NARRATOR.volume),
+    rate: clamp(n.rate, 0.5, 1.5, DEFAULT_NARRATOR.rate),
+    events: { ...DEFAULT_NARRATOR.events, ...(n.events ?? {}) },
+  };
 }
 
 /** Borrador de la pantalla de nueva partida: conserva sorteos confirmados al recargar. */
@@ -97,6 +133,11 @@ export interface AppData {
   syncedRevisions: Record<string, number>;
   /** Revisión de cada torneo ya confirmada por el servidor. */
   syncedTournamentRevisions: Record<string, number>;
+  challenges: Challenge[];
+  /** Revisión de cada reto ya confirmada por el servidor. */
+  syncedChallengeRevisions: Record<string, number>;
+  /** Identificador estable de este dispositivo (para distinguir un reenvío propio de un conflicto). */
+  deviceId: string;
   /** Fotos de jugadores (data URI JPEG pequeño), por clave de nombre (ver nameKey). */
   photos: Record<string, string>;
   /** Claves que no se pudieron leer (datos dañados). */
@@ -111,6 +152,7 @@ export const DEFAULT_SETTINGS: Settings = {
   reduceMotion: false,
   keepAwake: true,
   victorySound: false,
+  narrator: DEFAULT_NARRATOR,
 };
 
 const PREFIX = 'domino:v1:';
@@ -129,6 +171,12 @@ export const KEYS = {
   syncedTournaments: `${PREFIX}syncedTournaments`,
   setupDraft: `${PREFIX}setupDraft`,
   publicConfig: `${PREFIX}publicConfig`,
+  challengeIndex: `${PREFIX}challengeIds`,
+  challenge: (id: string) => `${PREFIX}challenge:${id}`,
+  syncedChallenges: `${PREFIX}syncedChallenges`,
+  deviceId: `${PREFIX}deviceId`,
+  /** Última cuenta con sesión (sin la contraseña ni el token): identifica al usuario sin conexión. */
+  sessionUser: `${PREFIX}sessionUser`,
 };
 
 function isTournament(value: unknown): value is Tournament {
@@ -162,6 +210,7 @@ export class Repository {
   private gameIds: string[] = [];
   private photoKeys: string[] = [];
   private tournamentIds: string[] = [];
+  private challengeIds: string[] = [];
   private storage: KeyValueStorage;
 
   constructor(storage: KeyValueStorage) {
@@ -201,6 +250,7 @@ export class Repository {
       ...defaults,
       ...stored,
       modes: { ...DEFAULT_SETTINGS.modes, ...defaults.modes, ...stored.modes },
+      narrator: normalizeNarrator(stored.narrator),
     };
     if (!stored.apiUrl && defaults.apiUrl) settings.apiUrl = defaults.apiUrl;
     let currentGameId = await this.readJson<string>(KEYS.current, corrupted);
@@ -219,6 +269,20 @@ export class Repository {
       else if (t != null) corrupted.push(KEYS.tournament(id));
     }
     this.tournamentIds = tournaments.map((t) => t.id);
+
+    const challenges: Challenge[] = [];
+    for (const id of (await this.readJson<string[]>(KEYS.challengeIndex, corrupted)) ?? []) {
+      const c = await this.readJson<Challenge>(KEYS.challenge(id), corrupted);
+      if (isChallenge(c)) challenges.push(c);
+      else if (c != null) corrupted.push(KEYS.challenge(id));
+    }
+    this.challengeIds = challenges.map((c) => c.id);
+
+    let deviceId = await this.readJson<string>(KEYS.deviceId, corrupted);
+    if (typeof deviceId !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(deviceId)) {
+      deviceId = `d${newId()}${Math.random().toString(36).slice(2, 8)}`;
+      await this.storage.setItem(KEYS.deviceId, JSON.stringify(deviceId));
+    }
 
     // Registro de jugadores: incorpora los nombres de la lista antigua de "jugadores recientes" y
     // vincula por nombre las partidas guardadas antes de que existiera el registro.
@@ -244,6 +308,9 @@ export class Repository {
       tournaments,
       syncedRevisions: (await this.readJson<Record<string, number>>(KEYS.synced, corrupted)) ?? {},
       syncedTournamentRevisions: (await this.readJson<Record<string, number>>(KEYS.syncedTournaments, corrupted)) ?? {},
+      challenges,
+      syncedChallengeRevisions: (await this.readJson<Record<string, number>>(KEYS.syncedChallenges, corrupted)) ?? {},
+      deviceId,
       corrupted,
     };
   }
@@ -261,6 +328,29 @@ export class Repository {
         this.tournamentIds = next;
       }
     });
+  }
+
+  saveChallenge(c: Challenge): Promise<void> {
+    return this.enqueue(async () => {
+      await this.storage.setItem(KEYS.challenge(c.id), JSON.stringify(c));
+      if (!this.challengeIds.includes(c.id)) {
+        const next = [...this.challengeIds, c.id];
+        await this.storage.setItem(KEYS.challengeIndex, JSON.stringify(next));
+        this.challengeIds = next;
+      }
+    });
+  }
+
+  saveSyncedChallengeRevisions(revisions: Record<string, number>): Promise<void> {
+    return this.enqueue(() => this.storage.setItem(KEYS.syncedChallenges, JSON.stringify(revisions)));
+  }
+
+  async loadSessionUser<U>(): Promise<U | null> {
+    return this.readJson<U>(KEYS.sessionUser, []);
+  }
+
+  saveSessionUser(user: unknown | null): Promise<void> {
+    return this.enqueue(() => (user ? this.storage.setItem(KEYS.sessionUser, JSON.stringify(user)) : this.storage.removeItem(KEYS.sessionUser)));
   }
 
   saveSyncedTournamentRevisions(revisions: Record<string, number>): Promise<void> {

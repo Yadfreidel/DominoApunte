@@ -63,6 +63,16 @@ export interface Game {
   /** Grupo de juego y temporada a los que se asoció la partida antes de empezar (opcionales). */
   groupId?: string | null;
   seasonId?: string | null;
+  /** Reto al que pertenece la partida (uno como máximo, fijado antes de empezar). */
+  challengeId?: string | null;
+  /** Cuenta con la que se creó en este dispositivo (solo local): evita subirla con otra cuenta. */
+  accountId?: number | null;
+  /**
+   * Conflicto de sincronización (solo local): otro dispositivo cambió la partida en el servidor
+   * desde la última versión sincronizada aquí. Se guarda la versión del servidor hasta que el
+   * usuario elija cuál conservar; mientras tanto no se envía.
+   */
+  conflict?: { server: Game; at: string } | null;
 }
 
 export interface GameRules {
@@ -94,6 +104,8 @@ export interface GameSetup {
   /** Asociación opcional con un grupo y una temporada (el servidor la valida al sincronizar). */
   groupId?: string | null;
   seasonId?: string | null;
+  /** Partida de un reto: reto y participante del reto de cada lado. */
+  challenge?: { challengeId: string; entrantIds: string[] };
 }
 
 export const MIN_PLAYERS = 2;
@@ -213,8 +225,8 @@ export function createGame(setup: GameSetup, now: string, makeId: () => string =
     });
     sides = participants.map((p) => ({ id: makeId(), name: p.name, participantIds: [p.id] }));
   }
-  if (setup.tournament) {
-    const entrantIds = setup.tournament.entrantIds;
+  if (setup.tournament || setup.challenge) {
+    const entrantIds = (setup.tournament ?? setup.challenge)!.entrantIds;
     sides.forEach((side, i) => {
       side.entrantId = entrantIds[i];
     });
@@ -244,6 +256,7 @@ export function createGame(setup: GameSetup, now: string, makeId: () => string =
     rules: setup.rules ? { passPoints: setup.rules.passPoints } : null,
     groupId: setup.groupId ?? null,
     seasonId: setup.groupId ? (setup.seasonId ?? null) : null,
+    challengeId: setup.challenge?.challengeId ?? null,
   };
 }
 
@@ -376,7 +389,7 @@ export function cancelGame(game: Game, now: string): Game {
 }
 
 /** Nueva partida con los mismos participantes, modalidad y meta; marcadores en cero. */
-export function createRematch(game: Game, now: string, makeId: () => string = newId): Game {
+export function createRematch(game: Game, now: string, makeId: () => string = newId, keepChallenge = false): Game {
   const participantMap = new Map(game.participants.map((p) => [p.id, makeId()]));
   return {
     id: makeId(),
@@ -395,6 +408,8 @@ export function createRematch(game: Game, now: string, makeId: () => string = ne
       id: makeId(),
       name: s.name,
       participantIds: s.participantIds.map((id) => participantMap.get(id)!),
+      // En un reto que sigue abierto, la revancha es la siguiente partida del reto.
+      ...(keepChallenge && game.challengeId && s.entrantId ? { entrantId: s.entrantId } : {}),
     })),
     hands: [],
     winnerSideId: null,
@@ -408,6 +423,8 @@ export function createRematch(game: Game, now: string, makeId: () => string = ne
     // Mismo grupo y temporada (el servidor vuelve a validar que la temporada siga admitiendo partidas).
     groupId: game.groupId ?? null,
     seasonId: game.seasonId ?? null,
+    challengeId: keepChallenge ? (game.challengeId ?? null) : null,
+    accountId: game.accountId ?? null,
   };
 }
 

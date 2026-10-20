@@ -9,6 +9,7 @@ import { useStore } from '@/state/AppStore';
 import { colors, fonts, radius, space } from '@/theme';
 import { Avatar } from './Avatar';
 import { useDialogs } from './Dialogs';
+import { SyncIndicator } from './SyncIndicator';
 import { Button, IconButton, type IconName } from './ui';
 import { useGoTo } from '@/navigation';
 
@@ -42,6 +43,7 @@ export function AppHeader({ subtitle, title }: { subtitle?: string; title?: stri
     },
     { label: 'Historial', href: '/historial', icon: 'time-outline' },
     { label: 'Torneos', href: '/torneos', icon: 'trophy-outline' },
+    { label: 'Retos', href: '/retos', icon: 'flag-outline' },
     { label: 'Grupos', href: '/grupos', icon: 'people-circle-outline' },
     { label: 'Estadísticas', href: '/estadisticas', icon: 'stats-chart-outline' },
     { label: 'Rivales', href: '/rivales', icon: 'git-compare-outline' },
@@ -94,6 +96,7 @@ export function AppHeader({ subtitle, title }: { subtitle?: string; title?: stri
           <View style={s.line} />
         </View>
       ) : null}
+      <SyncIndicator />
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
         <Pressable style={s.backdrop} onPress={() => setOpen(false)} accessibilityLabel="Cerrar menú">

@@ -3,6 +3,7 @@
 // de forma protegida y la app ofrece la anotación manual cuando no está disponible.
 import { Platform } from 'react-native';
 import type * as SpeechLib from 'expo-speech-recognition';
+import { narrator } from './narrator';
 
 type SpeechModule = typeof SpeechLib.ExpoSpeechRecognitionModule;
 
@@ -94,6 +95,8 @@ export async function listenOnce(handlers: ListenHandlers, contextualStrings: st
   }
 
   let finished = false;
+  // El narrador calla mientras se escucha (no habla encima de la voz que anota puntos).
+  narrator.setListening(true);
   const subs = [
     speechModule.addListener('result', (e) => {
       if (finished) return;
@@ -122,20 +125,27 @@ export async function listenOnce(handlers: ListenHandlers, contextualStrings: st
       }
     }
     if (activeSession === session) activeSession = null;
+    narrator.setListening(false);
     handlers.onEnd();
   }
 
   const session = { cancel: () => cleanup(true) };
   activeSession = session;
 
-  speechModule.start({
-    lang: speechLocale(),
-    interimResults: true,
-    continuous: false,
-    maxAlternatives: 1,
-    // Mejora el reconocimiento de los nombres de la partida (iOS y Android 13+).
-    contextualStrings: contextualStrings.slice(0, 50),
-  });
+  try {
+    speechModule.start({
+      lang: speechLocale(),
+      interimResults: true,
+      continuous: false,
+      maxAlternatives: 1,
+      // Mejora el reconocimiento de los nombres de la partida (iOS y Android 13+).
+      contextualStrings: contextualStrings.slice(0, 50),
+    });
+  } catch (err) {
+    // No llegó a escuchar: se libera todo (y el narrador vuelve a poder hablar).
+    cleanup(false);
+    throw err;
+  }
   return session.cancel;
 }
 

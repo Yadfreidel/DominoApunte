@@ -12,6 +12,7 @@ import { HandLedger, ScoreCard } from '@/components/Score';
 import { Button, Card, EmptyState, Screen } from '@/components/ui';
 import { VictoryCelebration } from '@/components/VictoryCelebration';
 import { formatDuration, gameDurationMs, newId, sideLabel, totals as computeTotals, victorySummary, type Game, type VictorySummary } from '@/domain/game.ts';
+import { challengeProgress, seriesScore } from '@/domain/challenge.ts';
 import { currentStreakOf, sideKey } from '@/domain/stats.ts';
 import { findMatch, resolveTournament } from '@/domain/tournament.ts';
 import { useStore } from '@/state/AppStore';
@@ -188,6 +189,30 @@ export default function Scoreboard() {
   const tournament = game.tournamentId ? store.tournaments.find((t) => t.id === game.tournamentId) ?? null : null;
   const tMatch = tournament && game.matchId ? findMatch(resolveTournament(tournament, store.games), game.matchId) : undefined;
   const context = tournament ? `${tournament.name} · ${tMatch?.roundName ?? 'Torneo'}` : undefined;
+  const challenge = game.challengeId ? store.challenges.find((c) => c.id === game.challengeId) ?? null : null;
+  const challengeScore = challenge ? seriesScore(challenge, challengeProgress(challenge, store.games, game.updatedAt)) : null;
+  const narratorOn = store.settings.narrator.enabled;
+  const muted = store.settings.narrator.muted;
+  const signedIn = !!store.user && !!store.settings.apiUrl;
+  const gameSynced = store.syncedRevisions[game.id] === game.revision;
+  const resolve = async (keep: 'servidor' | 'mia') => {
+    const ok = await confirm({
+      title: keep === 'servidor' ? '¿Usar la versión del otro dispositivo?' : '¿Conservar la versión de este dispositivo?',
+      message:
+        keep === 'servidor'
+          ? 'Las manos anotadas aquí que no estén en esa versión se descartarán.'
+          : 'Reemplazará en el servidor lo que anotó el otro dispositivo. Queda registrado como un cambio nuevo.',
+      confirmLabel: keep === 'servidor' ? 'Usar la otra' : 'Conservar la mía',
+      destructive: true,
+    });
+    if (!ok) return;
+    try {
+      await store.resolveConflict(game.id, keep);
+      toast('Conflicto resuelto');
+    } catch (err) {
+      toast(err instanceof Error ? err.message : 'No se pudo resolver.', 'error');
+    }
+  };
   const locked = store.lockReasonFor(game);
   const starter = game.starterParticipantId ? game.participants.find((p) => p.id === game.starterParticipantId) : undefined;
   const duration = gameDurationMs(game);
@@ -207,6 +232,41 @@ export default function Scoreboard() {
           </Text>
           <Text style={s.link}>Ver cuadro</Text>
         </Pressable>
+      ) : null}
+      {challenge ? (
+        <Pressable
+          onPress={() => goTo({ pathname: '/retos/[id]', params: { id: challenge.id } })}
+          accessibilityRole="button"
+          accessibilityLabel={`Ver el reto ${challenge.name}`}
+          style={({ pressed }) => [s.notice, s.tournamentBar, pressed && { opacity: 0.8 }]}
+        >
+          <Ionicons name="flag-outline" size={18} color={colors.warning} />
+          <Text style={s.noticeText} numberOfLines={1}>
+            Reto: {challenge.name}
+            {challengeScore ? ` · Serie ${challengeScore}` : ''}
+          </Text>
+          <Text style={s.link}>Ver reto</Text>
+        </Pressable>
+      ) : null}
+      {game.conflict ? (
+        <Card accent={colors.danger} style={{ gap: space.sm }}>
+          <View style={s.conflictTitle}>
+            <Ionicons name="git-compare-outline" size={22} color={colors.danger} />
+            <Text style={s.conflictText}>Otro dispositivo cambió esta partida mientras este no tenía conexión.</Text>
+          </View>
+          <Text style={s.conflictMeta}>
+            Aquí: {game.sides.map((sd) => `${sd.name} ${totals[sd.id]}`).join(' · ')} ({handCount} manos)
+          </Text>
+          <Text style={s.conflictMeta}>
+            En el otro dispositivo:{' '}
+            {game.conflict.server.sides.map((sd) => `${sd.name} ${computeTotals(game.conflict!.server)[sd.id] ?? 0}`).join(' · ')} ({game.conflict.server.hands.length} manos)
+          </Text>
+          <Text style={s.conflictMeta}>No se anotan más manos hasta que elijas cuál conservar.</Text>
+          <View style={s.winnerActions}>
+            <Button label="Usar la otra" variant="outline" size="sm" onPress={() => resolve('servidor')} style={{ flex: 1 }} />
+            <Button label="Conservar la mía" size="sm" onPress={() => resolve('mia')} style={{ flex: 1 }} />
+          </View>
+        </Card>
       ) : null}
       {game.practice ? (
         <View style={s.notice}>
@@ -347,6 +407,16 @@ export default function Scoreboard() {
             style={s.assistBtn}
           />
           <Button label="Pantalla grande" icon="tv-outline" variant="outline" size="sm" onPress={() => setBigScreenOpen(true)} style={s.assistBtn} />
+          {narratorOn ? (
+            <Button
+              label={muted ? 'Narrador silenciado' : 'Silenciar narrador'}
+              icon={muted ? 'volume-mute-outline' : 'volume-high-outline'}
+              variant="outline"
+              size="sm"
+              onPress={() => void store.updateSettings({ narrator: { ...store.settings.narrator, muted: !muted } })}
+              style={s.assistBtn}
+            />
+          ) : null}
         </View>
       ) : null}
 
@@ -384,7 +454,7 @@ export default function Scoreboard() {
         <Ionicons name="phone-portrait-outline" size={14} color={colors.textDim} />
         <Text style={s.footerText}>
           Cada mano se guarda en el dispositivo al confirmarla
-          {store.user ? (store.sync.pending ? ` · ${store.sync.pending} por sincronizar` : ' · sincronizado') : ''}
+          {signedIn ? (game.conflict ? ' · en conflicto' : gameSynced ? ' · sincronizada' : ' · pendiente de sincronizar') : ''}
         </Text>
       </View>
       {pending ? <Button label="Cancelar partida" variant="ghost" size="sm" icon="close-circle-outline" onPress={cancel} /> : null}
@@ -524,5 +594,8 @@ const s = StyleSheet.create({
   historyTitle: { color: colors.text, fontSize: 19, fontWeight: '700' },
   historyHint: { color: colors.textDim, fontSize: 12, textAlign: 'center' },
   footer: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  conflictTitle: { flexDirection: 'row', alignItems: 'center', gap: space.sm },
+  conflictText: { color: colors.text, fontSize: 15, fontWeight: '700', flex: 1 },
+  conflictMeta: { color: colors.textMuted, fontSize: 13 },
   footerText: { color: colors.textDim, fontSize: 12, textAlign: 'center', flexShrink: 1 },
 });

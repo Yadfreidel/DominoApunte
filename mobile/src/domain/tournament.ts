@@ -43,6 +43,8 @@ export interface Tournament {
   revision: number;
   /** Revisión de la última corrección administrativa incorporada (0 = ninguna). */
   adminRevision?: number;
+  /** Cuenta con la que se creó en este dispositivo (solo local): evita subirlo con otra cuenta. */
+  accountId?: number | null;
 }
 
 export interface TournamentInput {

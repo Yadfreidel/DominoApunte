@@ -98,6 +98,27 @@
         }
       } catch (e) {}
     </script>
+    <!-- Sin conexión: service worker que guarda solo los archivos de la app (ver public/sw.js).
+         No se registra en el servidor de desarrollo (puerto 8081) para no servir código viejo. -->
+    <script>
+      if ('serviceWorker' in navigator && location.port !== '8081' && (location.protocol === 'https:' || location.hostname === 'localhost')) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker
+            .register('/sw.js')
+            .then(function () {
+              return navigator.serviceWorker.ready;
+            })
+            .then(function (reg) {
+              var urls = performance.getEntriesByType('resource').map(function (e) {
+                return e.name;
+              });
+              urls.push(location.origin + '/');
+              if (reg.active) reg.active.postMessage({ type: 'cache-urls', urls: urls });
+            })
+            .catch(function () {});
+        });
+      }
+    </script>
   </head>
 
   <body>

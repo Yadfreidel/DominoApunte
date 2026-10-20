@@ -79,78 +79,175 @@ describe('siguiente partida y estadísticas', () => {
 });
 
 describe('pantalla encendida (Screen Wake Lock)', () => {
-  function fakeEnv({ supported = true, reject = false } = {}) {
-    const listeners = new Set<() => void>();
-    const state = { requests: 0, releases: 0 };
-    const doc = {
-      visibilityState: 'visible',
-      addEventListener: (_: 'visibilitychange', fn: () => void) => listeners.add(fn),
-      removeEventListener: (_: 'visibilitychange', fn: () => void) => listeners.delete(fn),
-    };
+  type Fn = () => void;
+  function fakeEnv({ supported = true, rejectWithoutGesture = false, rejectAlways = false } = {}) {
+    const listeners = new Map<string, Set<Fn>>();
+    const on = (t: string, fn: Fn) => (listeners.get(t) ?? listeners.set(t, new Set()).get(t)!).add(fn);
+    const off = (t: string, fn: Fn) => listeners.get(t)?.delete(fn);
+    const fire = (t: string) => [...(listeners.get(t) ?? [])].forEach((fn) => fn());
+    const state = { requests: 0, releases: 0, inGesture: false, sentinels: [] as { released: boolean; systemRelease(): void }[] };
+    const doc = { visibilityState: 'visible', addEventListener: on, removeEventListener: off };
     const env: WakeLockEnv = {
       document: doc,
+      window: { addEventListener: on, removeEventListener: off },
       wakeLock: supported
         ? {
             request: async () => {
               state.requests++;
-              if (reject) throw new Error('NotAllowedError');
+              const gesture = state.inGesture;
+              if (rejectAlways || (rejectWithoutGesture && !gesture)) throw Object.assign(new Error('denied'), { name: 'NotAllowedError' });
+              const rel = new Set<Fn>();
               const sentinel = {
                 released: false,
                 release: async () => {
+                  if (sentinel.released) return;
                   sentinel.released = true;
                   state.releases++;
+                  rel.forEach((fn) => fn());
                 },
+                addEventListener: (_: 'release', fn: Fn) => rel.add(fn),
+                removeEventListener: (_: 'release', fn: Fn) => rel.delete(fn),
+                systemRelease: () => void sentinel.release(),
               };
+              state.sentinels.push(sentinel);
               return sentinel;
             },
           }
         : undefined,
     };
+    const tick = () => new Promise((r) => setTimeout(r, 0));
     const setVisible = async (visible: boolean) => {
       doc.visibilityState = visible ? 'visible' : 'hidden';
-      listeners.forEach((fn) => fn());
-      await new Promise((r) => setTimeout(r, 0));
+      fire('visibilitychange');
+      await tick();
     };
-    return { env, state, setVisible, listeners };
+    const tap = async () => {
+      state.inGesture = true;
+      fire('touchend');
+      state.inGesture = false;
+      await tick();
+    };
+    const count = (t: string) => listeners.get(t)?.size ?? 0;
+    return { env, state, setVisible, tap, count, tick };
   }
-  const tick = () => new Promise((r) => setTimeout(r, 0));
 
-  test('pide el bloqueo, lo libera al quedar oculta y lo vuelve a pedir al regresar', async () => {
-    const { env, state, setVisible } = fakeEnv();
+  test('no indica «activo» hasta que el navegador lo concede', async () => {
+    const { env, tick } = fakeEnv();
+    const lock = createWebWakeLock(env);
+    assert.equal(lock.status(), 'apagado');
+    lock.start();
+    assert.equal(lock.status(), 'solicitando');
+    await tick();
+    assert.equal(lock.status(), 'activo');
+    assert.equal(lock.isHeld(), true);
+  });
+
+  test('lo libera al quedar oculta y lo vuelve a pedir al regresar', async () => {
+    const { env, state, setVisible, tick } = fakeEnv();
     const lock = createWebWakeLock(env);
     lock.start();
     await tick();
-    assert.equal(lock.isHeld(), true);
     await setVisible(false);
     assert.equal(lock.isHeld(), false);
+    assert.equal(lock.status(), 'en-pausa');
     assert.equal(state.releases, 1);
     await setVisible(true);
-    assert.equal(lock.isHeld(), true);
+    assert.equal(lock.status(), 'activo');
     assert.equal(state.requests, 2);
   });
 
-  test('al detenerlo libera el bloqueo y deja de escuchar', async () => {
-    const { env, listeners } = fakeEnv();
+  test('si el sistema lo suelta con la app visible, lo recupera una vez y no entra en bucle', async () => {
+    const { env, state, tap, setVisible, tick } = fakeEnv();
     const lock = createWebWakeLock(env);
     lock.start();
-    lock.start(); // no duplica
     await tick();
-    assert.equal(listeners.size, 1);
-    lock.stop();
-    assert.equal(lock.isHeld(), false);
-    assert.equal(listeners.size, 0);
+    state.sentinels.at(-1)!.systemRelease();
+    await tick();
+    assert.equal(lock.status(), 'activo');
+    assert.equal(state.requests, 2);
+    state.sentinels.at(-1)!.systemRelease();
+    await tick();
+    assert.equal(lock.status(), 'requiere-toque', 'el segundo «release» seguido espera un toque');
+    assert.equal(state.requests, 2);
+    await tap();
+    assert.equal(lock.status(), 'activo');
+    // Al volver a la app se reinicia el margen de reintento automático.
+    await setVisible(false);
+    await setVisible(true);
+    state.sentinels.at(-1)!.systemRelease();
+    await tick();
+    assert.equal(lock.status(), 'activo');
   });
 
-  test('sin soporte o si el navegador lo rechaza, no falla', async () => {
-    const unsupported = createWebWakeLock(fakeEnv({ supported: false }).env);
-    assert.equal(unsupported.supported, false);
-    unsupported.start();
+  test('si el navegador exige un toque (Safari), lo obtiene en el siguiente toque', async () => {
+    const { env, state, tap, tick } = fakeEnv({ rejectWithoutGesture: true });
+    const lock = createWebWakeLock(env);
+    lock.start();
     await tick();
-    assert.equal(unsupported.isHeld(), false);
-    const rejected = createWebWakeLock(fakeEnv({ reject: true }).env);
-    rejected.start();
+    assert.equal(lock.status(), 'requiere-toque');
+    assert.equal(lock.lastError(), 'NotAllowedError');
+    await tap();
+    assert.equal(lock.status(), 'activo');
+    await tap(); // ya concedido: no vuelve a pedir
+    assert.equal(state.requests, 2);
+  });
+
+  test('si el teléfono lo bloquea incluso con un toque, no insiste en cada toque; el botón reintenta', async () => {
+    const { env, state, tap, tick } = fakeEnv({ rejectAlways: true });
+    const lock = createWebWakeLock(env);
+    lock.start();
     await tick();
-    assert.equal(rejected.isHeld(), false);
-    rejected.stop();
+    await tap();
+    assert.equal(lock.status(), 'bloqueado');
+    const before = state.requests;
+    await tap();
+    await tap();
+    assert.equal(state.requests, before);
+    assert.equal(await lock.retry(), false);
+    assert.equal(state.requests, before + 1);
+  });
+
+  test('sin solicitudes simultáneas ni listeners duplicados; al detenerlo libera y deja de escuchar', async () => {
+    const { env, state, count, setVisible, tick } = fakeEnv();
+    const lock = createWebWakeLock(env);
+    lock.start();
+    lock.start();
+    void lock.retry();
+    void lock.retry();
+    await tick();
+    assert.equal(state.requests, 1);
+    assert.equal(count('visibilitychange'), 1);
+    assert.equal(count('touchend'), 1);
+    lock.stop();
+    assert.equal(lock.isHeld(), false);
+    assert.equal(lock.status(), 'apagado');
+    assert.equal(count('visibilitychange'), 0);
+    assert.equal(count('touchend'), 0);
+    assert.equal(count('pageshow'), 0);
+    await setVisible(false);
+    await setVisible(true);
+    assert.equal(state.requests, 1, 'detenido no vuelve a pedir');
+  });
+
+  test('si se oculta mientras se pide, lo suelta al llegar', async () => {
+    const { env, state, tick } = fakeEnv();
+    const lock = createWebWakeLock(env);
+    lock.start();
+    env.document.visibilityState = 'hidden';
+    await tick();
+    assert.equal(lock.isHeld(), false);
+    assert.equal(state.releases, 1);
+    assert.equal(lock.status(), 'en-pausa');
+  });
+
+  test('sin soporte no falla e informa «sin-soporte»', async () => {
+    const { env, tick } = fakeEnv({ supported: false });
+    const lock = createWebWakeLock(env);
+    assert.equal(lock.supported, false);
+    lock.start();
+    await tick();
+    assert.equal(lock.status(), 'sin-soporte');
+    assert.equal(await lock.retry(), false);
+    lock.stop();
   });
 });

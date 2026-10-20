@@ -3,16 +3,17 @@ import { useState } from 'react';
 import { StyleSheet, Switch, Text, View } from 'react-native';
 import { AppHeader } from '@/components/AppHeader';
 import { useDialogs } from '@/components/Dialogs';
-import { formatDateTime } from '@/components/GameSummary';
+import { NarratorSection, OfflineSection } from '@/components/SettingsSections';
 import { Button, Card, ErrorText, Field, Label, Pill, Screen, Select } from '@/components/ui';
 import { parseTarget } from '@/domain/game.ts';
 import { ApiError, normalizeApiUrl, request, ROLE_LABEL } from '@/services/api';
+import { screenAwake, useScreenAwakeStatus, type WakeStatus } from '@/services/screenAwake';
 import { useStore } from '@/state/AppStore';
 import { colors, fonts, space } from '@/theme';
 
 export default function SettingsScreen() {
   const store = useStore();
-  const { settings, user, sync, defaults, themePending } = store;
+  const { settings, user, defaults, themePending } = store;
   const { confirm, toast } = useDialogs();
 
   const [newTarget, setNewTarget] = useState('');
@@ -89,7 +90,7 @@ export default function SettingsScreen() {
   const logout = async () => {
     const ok = await confirm({
       title: '¿Cerrar sesión?',
-      message: 'Las partidas siguen guardadas en este dispositivo y se sincronizarán al volver a entrar.',
+      message: 'Las partidas siguen guardadas en este dispositivo. Las pendientes se sincronizarán cuando esta misma cuenta vuelva a entrar (no se suben con otra cuenta).',
       confirmLabel: 'Cerrar sesión',
     });
     if (ok) {
@@ -165,21 +166,20 @@ export default function SettingsScreen() {
             onChange={(v) => store.updateSettings({ reduceMotion: v })}
           />
           <ToggleRow
-            label="Mantener la pantalla encendida mientras juegas"
+            label="Mantener pantalla encendida"
             value={settings.keepAwake}
             onChange={(v) => store.updateSettings({ keepAwake: v })}
           />
+          <AwakeStatus enabled={settings.keepAwake} />
           <ToggleRow
             label="Sonido de victoria"
             value={settings.victorySound}
             onChange={(v) => store.updateSettings({ victorySound: v })}
           />
-          <Text style={s.meta}>
-            La pantalla encendida depende del teléfono y del navegador: algunos (o el modo de ahorro de batería) no lo permiten, y
-            entonces se apaga según su ajuste habitual.
-          </Text>
         </View>
       </Card>
+
+      <NarratorSection />
 
       <Card style={s.section}>
         <Text style={s.title}>Servidor y cuenta</Text>
@@ -209,19 +209,6 @@ export default function SettingsScreen() {
                 </View>
                 <Button label="Salir" size="sm" variant="outline" onPress={logout} />
               </View>
-              <View style={s.syncBox}>
-                <Text style={s.meta}>
-                  {sync.syncing
-                    ? 'Sincronizando…'
-                    : sync.pending
-                      ? `${sync.pending} partida(s) pendientes de sincronizar`
-                      : 'Todo sincronizado'}
-                  {sync.lastSyncAt ? ` · última vez ${formatDateTime(sync.lastSyncAt)}` : ''}
-                </Text>
-                {sync.lastError ? <ErrorText>{sync.lastError}</ErrorText> : null}
-                {sync.lastWarning ? <Text style={s.meta}>Aviso: {sync.lastWarning}</Text> : null}
-                <Button label="Sincronizar ahora" icon="sync" variant="outline" size="sm" onPress={() => store.syncNow()} loading={sync.syncing} />
-              </View>
             </View>
           ) : (
             <View style={{ gap: space.md }}>
@@ -242,8 +229,43 @@ export default function SettingsScreen() {
         ) : null}
       </Card>
 
+      <OfflineSection />
+
       <Text style={s.footnote}>Las partidas se guardan en este dispositivo y funcionan sin conexión.</Text>
     </Screen>
+  );
+}
+
+const AWAKE_TEXT: Record<WakeStatus, { text: string; color: string }> = {
+  apagado: { text: 'Desactivado: la pantalla se apaga según el ajuste del teléfono.', color: colors.textMuted },
+  'sin-soporte': {
+    text: 'Este navegador no permite mantener la pantalla encendida. Abre la app en Chrome o Safari (no desde el navegador interno de WhatsApp u otra app), o instálala en la pantalla de inicio.',
+    color: colors.warning,
+  },
+  solicitando: { text: 'Solicitando al teléfono…', color: colors.textMuted },
+  activo: { text: 'Activa: la pantalla no se apagará mientras la app esté abierta y a la vista.', color: colors.lime },
+  'en-pausa': { text: 'En pausa: se reactivará al volver a la app.', color: colors.textMuted },
+  'requiere-toque': { text: 'Pendiente: se activará al tocar la pantalla.', color: colors.warning },
+  bloqueado: {
+    text: 'El teléfono no lo permitió (por ejemplo, con el ahorro de batería activado). Mientras tanto, la pantalla se apaga según su ajuste.',
+    color: colors.warning,
+  },
+};
+
+/** Estado real del bloqueo, distinto de la preferencia. */
+function AwakeStatus({ enabled }: { enabled: boolean }) {
+  const status = useScreenAwakeStatus();
+  const shown: WakeStatus = enabled ? status : 'apagado';
+  const info = AWAKE_TEXT[shown];
+  return (
+    <View style={{ gap: space.sm }}>
+      <Text style={[s.meta, { color: info.color }]} accessibilityLiveRegion="polite">
+        {info.text}
+      </Text>
+      {enabled && (shown === 'requiere-toque' || shown === 'bloqueado') ? (
+        <Button label="Mantener pantalla encendida" icon="sunny-outline" variant="outline" size="sm" onPress={() => void screenAwake().retry()} />
+      ) : null}
+    </View>
   );
 }
 
@@ -274,7 +296,6 @@ const s = StyleSheet.create({
   toggleLabel: { color: colors.text, fontSize: 16, flex: 1 },
   userBox: { flexDirection: 'row', alignItems: 'center', gap: space.md },
   userName: { color: colors.text, fontSize: 17, fontWeight: '700' },
-  syncBox: { gap: space.sm, borderTopWidth: 1, borderTopColor: colors.borderSoft, paddingTop: space.md },
   warn: { color: colors.danger, fontSize: 14 },
   footnote: { color: colors.textDim, fontSize: 12, textAlign: 'center' },
 });

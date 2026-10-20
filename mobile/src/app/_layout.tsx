@@ -10,6 +10,7 @@ import { StatusBar } from 'expo-status-bar';
 import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { DialogProvider } from '@/components/Dialogs';
+import { NarratorHost } from '@/components/NarratorHost';
 import { ScreenAwake } from '@/components/ScreenAwake';
 import { Loading, StadiumBackground } from '@/components/ui';
 import { AppStoreProvider } from '@/state/AppStore';
@@ -33,7 +34,6 @@ export default function RootLayout() {
         </View>
       ) : (
         <AppStoreProvider>
-          <ScreenAwake />
           <DialogProvider>
             <Stack
               screenOptions={{
@@ -43,6 +43,9 @@ export default function RootLayout() {
               }}
             />
           </DialogProvider>
+          {/* Después de las pantallas: su aviso queda por encima. */}
+          <ScreenAwake />
+          <NarratorHost />
         </AppStoreProvider>
       )}
     </SafeAreaProvider>
